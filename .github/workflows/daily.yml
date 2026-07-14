@@ -1,0 +1,33 @@
+name: Daily prices
+
+on:
+  schedule:
+    - cron: "43 21 * * 1-5"   # ~5:43pm ET weekdays, after the close
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install yfinance pandas requests
+      - run: python scan/fetch_prices.py
+      - name: Commit and push
+        run: |
+          git config user.name "sim-desk-bot"
+          git config user.email "bot@sim-desk"
+          git add docs/data/prices.json
+          git diff --cached --quiet && echo "No changes" || \
+            git commit -m "chore: daily prices $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main
+          git push

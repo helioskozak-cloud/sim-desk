@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Desk — Paper Trading</title>
+<style>
+  :root{--bg:#010409;--surface:#0d1117;--panel:#161b22;--border:#30363d;
+        --ink:#e6edf3;--ink2:#8b949e;--ink3:#6e7681;--blue:#58a6ff;
+        --green:#3fb950;--red:#f85149;--amber:#e3b341;}
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif;
+       max-width:1080px;margin:0 auto;padding:28px 16px 70px}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  .eyebrow{font-family:ui-monospace,Consolas,monospace;font-size:11px;
+           letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+  h1{font-size:22px;margin:2px 0 4px}
+  .sub{color:var(--ink2);font-size:12.5px;margin-bottom:18px}
+  .tiles{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+  .tile{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+        padding:10px 14px;flex:1;min-width:140px}
+  .tile .k{color:var(--ink3);font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+  .tile .v{font-size:20px;font-weight:700;font-family:ui-monospace,Consolas,monospace}
+  .tile .d{font-size:11px;color:var(--ink2)}
+  .row{display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+  input,select,button{background:var(--panel);border:1px solid var(--border);
+        border-radius:8px;color:var(--ink);padding:9px 12px;font-size:14px}
+  input:focus,select:focus{outline:none;border-color:var(--blue)}
+  #ticker{width:150px;text-transform:uppercase;font-family:ui-monospace,Consolas,monospace}
+  #amount{width:130px}
+  button{cursor:pointer;font-weight:600}
+  #buyBtn{background:#238636;border-color:#238636;color:#fff}
+  #sellBtn{background:#8b1e1e;border-color:#8b1e1e;color:#fff}
+  button:disabled{opacity:.45;cursor:default}
+  #quote{font-size:12.5px;color:var(--ink2);min-height:20px;margin-bottom:14px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+        padding:14px 16px;margin-bottom:16px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);
+     margin-bottom:8px;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{color:var(--ink3);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+     text-align:right;padding:5px 8px;border-bottom:1px solid var(--border);font-weight:500}
+  td{text-align:right;padding:6px 8px;border-bottom:1px solid #21262d;
+     font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+  .pos{color:var(--green)}.neg{color:var(--red)}
+  .sellrow{color:var(--blue);cursor:pointer;text-decoration:underline}
+  #chart{width:100%}
+  .foot{color:var(--ink3);font-size:11px;margin-top:6px}
+  #resetBtn{background:none;border:1px solid var(--border);color:var(--ink3);
+            font-size:12px;padding:5px 10px}
+  .empty{color:var(--ink3);padding:14px 0;font-size:13px}
+  #uniList{max-height:210px;overflow-y:auto;font-size:12.5px}
+  #uniList div{padding:4px 6px;cursor:pointer;border-radius:5px;display:flex;justify-content:space-between}
+  #uniList div:hover{background:var(--panel)}
+</style>
+</head>
+<body>
+<div class="eyebrow">Finance Suite · Training</div>
+<h1>Sim Desk — Paper Trading</h1>
+<div class="sub" id="asof">Loading prices…</div>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="card">
+  <h2>Trade</h2>
+  <div class="row">
+    <input id="ticker" placeholder="TICKER" maxlength="8" list="unidata">
+    <datalist id="unidata"></datalist>
+    <select id="mode"><option value="usd">$ amount</option><option value="sh">shares</option></select>
+    <input id="amount" type="number" min="0" step="any" placeholder="1000">
+    <button id="buyBtn">Buy</button>
+    <button id="sellBtn">Sell</button>
+  </div>
+  <div id="quote"></div>
+  <div class="row" style="align-items:center">
+    <input id="uniSearch" placeholder="Browse universe — name or theme…" style="flex:1">
+  </div>
+  <div id="uniList"></div>
+</div>
+
+<div class="card">
+  <h2>Positions</h2>
+  <div id="positions"></div>
+</div>
+
+<div class="card">
+  <h2>Equity curve vs SPY (both indexed to 100 at your start)</h2>
+  <div id="chartBox"><svg id="chart" viewBox="0 0 900 220"></svg></div>
+  <div class="foot" id="chartFoot"></div>
+</div>
+
+<div class="card">
+  <h2>Trade history</h2>
+  <div id="history"></div>
+  <div style="margin-top:10px"><button id="resetBtn">Reset account (wipes everything)</button></div>
+</div>
+
+<div class="foot">
+  Training simulator. Orders fill at the most recent <b>daily close</b> in the published
+  price file — there is no intraday execution, no commissions, no shorting, no margin.
+  Universe = the ~1,380 stocks &amp; ETFs regime-desk tracks. Your account lives in THIS
+  browser's storage only. Educational use; not investment advice.
+</div>
+
+<script>
+"use strict";
+const START_CASH = 100000;
+const LS_KEY = "simdesk_v1";
+let PX = null;          // prices payload
+let state = null;       // {cash, lots:{T:{qty,cost}}, trades:[], curve:[{d,v,spy}], spy0, created}
+
+function load() {
+  try { state = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { state = null; }
+  if (!state || typeof state.cash !== "number") {
+    state = { cash: START_CASH, lots: {}, trades: [], curve: [], spy0: null,
+              created: new Date().toISOString().slice(0, 10) };
+  }
+}
+function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+function price(t) { return PX && PX.prices[t] != null ? PX.prices[t] : null; }
+function fmt$(v) { return "$" + v.toLocaleString(undefined, {maximumFractionDigits: 0}); }
+function fmt2(v) { return v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+function totals() {
+  let pos = 0;
+  for (const [t, lot] of Object.entries(state.lots)) {
+    const p = price(t);
+    pos += p != null ? lot.qty * p : lot.cost; // unpriceable falls back to cost
+  }
+  return { pos, total: pos + state.cash };
+}
+
+function markCurve() {
+  if (!PX) return;
+  const spy = price("SPY");
+  if (state.spy0 == null && spy != null) state.spy0 = spy;
+  const t = totals();
+  const last = state.curve[state.curve.length - 1];
+  if (!last || last.d !== PX.as_of) {
+    state.curve.push({ d: PX.as_of, v: t.total, spy: spy });
+  } else { last.v = t.total; last.spy = spy; }
+  save();
+}
+
+function renderTiles() {
+  const t = totals();
+  const pl = t.total - START_CASH;
+  const plPct = pl / START_CASH * 100;
+  const spy = price("SPY");
+  const spyPct = (state.spy0 && spy) ? (spy / state.spy0 - 1) * 100 : null;
+  const alpha = spyPct != null ? plPct - spyPct : null;
+  const cls = v => v >= 0 ? "pos" : "neg";
+  document.getElementById("tiles").innerHTML =
+    tile("Account value", fmt$(t.total), "cash " + fmt$(state.cash)) +
+    tile("P&L", (pl >= 0 ? "+" : "") + fmt$(pl), (plPct >= 0 ? "+" : "") + plPct.toFixed(2) + "%", cls(pl)) +
+    tile("SPY same period", spyPct != null ? (spyPct >= 0 ? "+" : "") + spyPct.toFixed(2) + "%" : "—",
+         "since your first mark", spyPct != null ? cls(spyPct) : "") +
+    tile("vs SPY", alpha != null ? (alpha >= 0 ? "+" : "") + alpha.toFixed(2) + "pp" : "—",
+         "your alpha", alpha != null ? cls(alpha) : "") +
+    tile("Positions", Object.keys(state.lots).length, PX ? PX.as_of + " closes" : "");
+  function tile(k, v, d, c) {
+    return `<div class="tile"><div class="k">${k}</div><div class="v ${c||""}">${v}</div><div class="d">${d||""}</div></div>`;
+  }
+}
+
+function renderPositions() {
+  const el = document.getElementById("positions");
+  const syms = Object.keys(state.lots).sort();
+  if (!syms.length) { el.innerHTML = '<div class="empty">No positions yet — buy something above. Starting cash is $100,000.</div>'; return; }
+  let rows = "";
+  for (const t of syms) {
+    const lot = state.lots[t];
+    const p = price(t);
+    const mv = p != null ? lot.qty * p : lot.cost;
+    const avg = lot.cost / lot.qty;
+    const pl = p != null ? (p - avg) * lot.qty : 0;
+    const plp = p != null ? (p / avg - 1) * 100 : null;
+    const chg = p != null && PX.prev[t] ? (p / PX.prev[t] - 1) * 100 : null;
+    rows += `<tr><td class="mono"><b>${esc(t)}</b></td><td style="color:var(--ink3)">${esc((PX.themes[t]||"—"))}</td>
+      <td>${lot.qty.toFixed(4).replace(/\.?0+$/,"")}</td><td>$${fmt2(avg)}</td>
+      <td>${p!=null?"$"+fmt2(p):"—"}</td>
+      <td class="${chg>=0?"pos":"neg"}">${chg!=null?(chg>=0?"+":"")+chg.toFixed(2)+"%":"—"}</td>
+      <td>${fmt$(mv)}</td>
+      <td class="${pl>=0?"pos":"neg"}">${(pl>=0?"+":"")+fmt$(pl)}${plp!=null?" ("+(plp>=0?"+":"")+plp.toFixed(1)+"%)":""}</td>
+      <td><span class="sellrow" data-t="${esc(t)}">sell</span></td></tr>`;
+  }
+  el.innerHTML = `<table><tr><th>Ticker</th><th>Theme</th><th>Qty</th><th>Avg cost</th><th>Last close</th><th>Day</th><th>Value</th><th>P&L</th><th></th></tr>${rows}</table>`;
+  el.querySelectorAll(".sellrow").forEach(x => x.addEventListener("click", () => {
+    document.getElementById("ticker").value = x.dataset.t;
+    document.getElementById("mode").value = "sh";
+    document.getElementById("amount").value = state.lots[x.dataset.t].qty;
+    quote();
+    window.scrollTo({top: 0, behavior: "smooth"});
+  }));
+}
+
+function renderHistory() {
+  const el = document.getElementById("history");
+  if (!state.trades.length) { el.innerHTML = '<div class="empty">No trades yet.</div>'; return; }
+  const rows = state.trades.slice().reverse().slice(0, 200).map(tr =>
+    `<tr><td>${tr.ts}</td><td class="mono"><b class="${tr.side==="BUY"?"pos":"neg"}">${tr.side}</b> ${esc(tr.t)}</td>
+     <td>${tr.qty.toFixed(4).replace(/\.?0+$/,"")}</td><td>$${fmt2(tr.px)}</td><td>${fmt$(tr.qty*tr.px)}</td>
+     <td style="color:var(--ink3)">${tr.fill}</td></tr>`).join("");
+  el.innerHTML = `<table><tr><th>When</th><th>Trade</th><th>Qty</th><th>Fill</th><th>Value</th><th>Fill basis</th></tr>${rows}</table>`;
+}
+
+function renderChart() {
+  const svg = document.getElementById("chart");
+  const c = state.curve;
+  if (c.length < 2) {
+    svg.innerHTML = '<text x="12" y="30" fill="#6e7681" font-size="12">The equity curve appears after your account has marks on two different price dates — check back tomorrow after the close.</text>';
+    document.getElementById("chartFoot").textContent = "";
+    return;
+  }
+  const W = 900, H = 220, L = 46, R = 8, T = 12, B = 24;
+  const you = c.map(p => p.v / START_CASH * 100);
+  const spy = c.map(p => state.spy0 && p.spy ? p.spy / state.spy0 * 100 : null);
+  const all = you.concat(spy.filter(v => v != null));
+  const mn = Math.min(...all), mx = Math.max(...all), rg = (mx - mn) || 1;
+  const x = i => L + i / (c.length - 1) * (W - L - R);
+  const y = v => T + (1 - (v - mn) / rg) * (H - T - B);
+  const line = (vals, color, w) => {
+    const pts = vals.map((v, i) => v != null ? `${x(i).toFixed(1)},${y(v).toFixed(1)}` : null)
+                    .filter(Boolean).join(" ");
+    return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="${w}"/>`;
+  };
+  svg.innerHTML =
+    `<line x1="${L}" x2="${W-R}" y1="${y(100)}" y2="${y(100)}" stroke="#30363d" stroke-dasharray="3,3"/>` +
+    `<text x="${L-6}" y="${y(100)+3}" text-anchor="end" font-size="9" fill="#6e7681">100</text>` +
+    line(spy, "#8b949e", 1.2) + line(you, "#58a6ff", 1.8) +
+    `<text x="${L}" y="${H-6}" font-size="9" fill="#6e7681">${c[0].d}</text>` +
+    `<text x="${W-R}" y="${H-6}" text-anchor="end" font-size="9" fill="#6e7681">${c[c.length-1].d}</text>`;
+  document.getElementById("chartFoot").textContent =
+    `Blue = your account, gray = SPY, both indexed to 100 at your start (${c[0].d}). One mark per trading day.`;
+}
+
+function quote() {
+  const t = (document.getElementById("ticker").value || "").trim().toUpperCase();
+  const el = document.getElementById("quote");
+  if (!t || !PX) { el.textContent = ""; return; }
+  const p = price(t);
+  if (p == null) {
+    el.innerHTML = PX.themes[t]
+      ? `${t} is in the universe but has no price in today's file — try another name.`
+      : `${t} isn't in the tradeable universe (the ~1,380 tickers regime-desk tracks).`;
+    return;
+  }
+  const chg = PX.prev[t] ? (p / PX.prev[t] - 1) * 100 : null;
+  const held = state.lots[t];
+  el.innerHTML = `<b class="mono">${t}</b> · ${esc(PX.themes[t] || "—")} · last close $${fmt2(p)}` +
+    (chg != null ? ` · <span class="${chg>=0?"pos":"neg"}">${(chg>=0?"+":"")+chg.toFixed(2)}% day</span>` : "") +
+    (held ? ` · you hold ${held.qty.toFixed(4).replace(/\.?0+$/,"")} sh` : "");
+}
+
+function orderQty(t, p) {
+  const mode = document.getElementById("mode").value;
+  const amt = parseFloat(document.getElementById("amount").value);
+  if (!(amt > 0)) return null;
+  return mode === "usd" ? amt / p : amt;
+}
+
+function buy() {
+  const t = (document.getElementById("ticker").value || "").trim().toUpperCase();
+  const p = price(t);
+  if (p == null) { quote(); return; }
+  const qty = orderQty(t, p);
+  if (qty == null) return alert("Enter an amount.");
+  const cost = qty * p;
+  if (cost > state.cash + 1e-6) return alert(`Not enough cash: need ${fmt$(cost)}, have ${fmt$(state.cash)}.`);
+  state.cash -= cost;
+  const lot = state.lots[t] || { qty: 0, cost: 0 };
+  lot.qty += qty; lot.cost += cost;
+  state.lots[t] = lot;
+  state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
+                      side: "BUY", t, qty, px: p, fill: PX.as_of + " close" });
+  markCurve(); save(); renderAll();
+}
+
+function sell() {
+  const t = (document.getElementById("ticker").value || "").trim().toUpperCase();
+  const lot = state.lots[t];
+  if (!lot) return alert(`No position in ${t} (shorting is disabled in the simulator).`);
+  const p = price(t);
+  if (p == null) return alert(`${t} has no price today.`);
+  let qty = orderQty(t, p);
+  if (qty == null) return alert("Enter an amount.");
+  if (qty > lot.qty + 1e-9) qty = lot.qty; // sell-all clamp
+  const proceeds = qty * p;
+  const frac = qty / lot.qty;
+  lot.cost *= (1 - frac); lot.qty -= qty;
+  if (lot.qty < 1e-9) delete state.lots[t];
+  state.cash += proceeds;
+  state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
+                      side: "SELL", t, qty, px: p, fill: PX.as_of + " close" });
+  markCurve(); save(); renderAll();
+}
+
+function renderUniverse() {
+  const q = (document.getElementById("uniSearch").value || "").trim().toUpperCase();
+  const el = document.getElementById("uniList");
+  if (!PX) return;
+  if (!q) { el.innerHTML = '<div style="cursor:default;color:var(--ink3)">Type to search the universe — e.g. "semis", "NVDA", "defense", "crypto".</div>'; return; }
+  const hits = [];
+  for (const [t, th] of Object.entries(PX.themes)) {
+    if (t.includes(q) || String(th).toUpperCase().includes(q)) {
+      hits.push([t, th]);
+      if (hits.length >= 60) break;
+    }
+  }
+  el.innerHTML = hits.map(([t, th]) => {
+    const p = price(t);
+    return `<div data-t="${esc(t)}"><span><b class="mono">${esc(t)}</b> <span style="color:var(--ink3)">${esc(th)}</span></span><span class="mono">${p!=null?"$"+fmt2(p):"—"}</span></div>`;
+  }).join("") || '<div style="cursor:default;color:var(--ink3)">No matches.</div>';
+  el.querySelectorAll("div[data-t]").forEach(x => x.addEventListener("click", () => {
+    document.getElementById("ticker").value = x.dataset.t; quote();
+  }));
+}
+
+function renderAll() { renderTiles(); renderPositions(); renderHistory(); renderChart(); }
+
+async function init() {
+  load();
+  try {
+    const r = await fetch("data/prices.json?_=" + Date.now());
+    PX = await r.json();
+    document.getElementById("asof").textContent =
+      `Fills at ${PX.as_of} closes · ${Object.keys(PX.prices).length} tradeable tickers · account stored in this browser`;
+  } catch (e) {
+    document.getElementById("asof").textContent = "Price file failed to load — refresh, or tell whoever runs this.";
+  }
+  markCurve();
+  renderAll(); renderUniverse();
+}
+
+document.getElementById("buyBtn").addEventListener("click", buy);
+document.getElementById("sellBtn").addEventListener("click", sell);
+document.getElementById("ticker").addEventListener("input", quote);
+document.getElementById("uniSearch").addEventListener("input", renderUniverse);
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (confirm("Reset the account to $100,000 and wipe all history?")) {
+    localStorage.removeItem(LS_KEY); load(); markCurve(); renderAll();
+  }
+});
+init();
+</script>
+</body>
+</html>
