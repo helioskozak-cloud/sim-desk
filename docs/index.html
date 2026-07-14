@@ -121,6 +121,56 @@ function load() {
 function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
 function price(t) { return PX && PX.prices[t] != null ? PX.prices[t] : null; }
+function nameOf(t) { return (PX && PX.names && PX.names[t]) || ""; }
+
+// --- telemetry: trades + daily snapshots go to the desk's API so the boss
+// --- can review activity. Queued in localStorage when the API is offline.
+const EP_FILE = "https://helioskozak-cloud.github.io/regime-desk/api_endpoint.json";
+let SIM_API = null;
+function trader() {
+  let n = localStorage.getItem("simdesk_trader");
+  if (!n) {
+    n = (prompt("Name for your trade log (shown to your supervisor):") || "intern").trim().slice(0, 40) || "intern";
+    localStorage.setItem("simdesk_trader", n);
+  }
+  return n;
+}
+async function apiOk(base) {
+  try { const r = await fetch(base + "/api/ping", {signal: AbortSignal.timeout(2500)});
+        return (await r.json()).ok; } catch (e) { return false; }
+}
+async function discoverSimApi() {
+  if (await apiOk("http://127.0.0.1:7534")) { SIM_API = "http://127.0.0.1:7534"; flushOutbox(); return; }
+  try {
+    const r = await fetch(EP_FILE + "?_=" + Date.now(), {signal: AbortSignal.timeout(4000)});
+    const u = (await r.json()).url;
+    if (u && await apiOk(u)) { SIM_API = u; flushOutbox(); }
+  } catch (e) {}
+}
+function logEvent(evt) {
+  evt.trader = trader(); evt.ts = new Date().toISOString().slice(0, 16);
+  const box = JSON.parse(localStorage.getItem("simdesk_outbox") || "[]");
+  box.push(evt);
+  localStorage.setItem("simdesk_outbox", JSON.stringify(box.slice(-500)));
+  flushOutbox();
+}
+let flushing = false;
+async function flushOutbox() {
+  if (!SIM_API || flushing) return;
+  flushing = true;
+  try {
+    let box = JSON.parse(localStorage.getItem("simdesk_outbox") || "[]");
+    while (box.length) {
+      const r = await fetch(SIM_API + "/api/sim/log", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(box[0]), signal: AbortSignal.timeout(6000)});
+      if (!(await r.json()).ok) break;
+      box.shift();
+      localStorage.setItem("simdesk_outbox", JSON.stringify(box));
+    }
+  } catch (e) { /* stays queued */ }
+  flushing = false;
+}
 function fmt$(v) { return "$" + v.toLocaleString(undefined, {maximumFractionDigits: 0}); }
 function fmt2(v) { return v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
@@ -142,6 +192,7 @@ function markCurve() {
   const last = state.curve[state.curve.length - 1];
   if (!last || last.d !== PX.as_of) {
     state.curve.push({ d: PX.as_of, v: t.total, spy: spy });
+    logEvent({type: "snapshot", total: t.total, cash: state.cash, spy: spy, as_of: PX.as_of});
   } else { last.v = t.total; last.spy = spy; }
   save();
 }
@@ -251,7 +302,7 @@ function quote() {
   }
   const chg = PX.prev[t] ? (p / PX.prev[t] - 1) * 100 : null;
   const held = state.lots[t];
-  el.innerHTML = `<b class="mono">${t}</b> · ${esc(PX.themes[t] || "—")} · last close $${fmt2(p)}` +
+  el.innerHTML = `<b class="mono">${t}</b>${nameOf(t) ? " · " + esc(nameOf(t)) : ""} · ${esc(PX.themes[t] || "—")} · last close $${fmt2(p)}` +
     (chg != null ? ` · <span class="${chg>=0?"pos":"neg"}">${(chg>=0?"+":"")+chg.toFixed(2)}% day</span>` : "") +
     (held ? ` · you hold ${held.qty.toFixed(4).replace(/\.?0+$/,"")} sh` : "");
 }
@@ -277,6 +328,9 @@ function buy() {
   state.lots[t] = lot;
   state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
                       side: "BUY", t, qty, px: p, fill: PX.as_of + " close" });
+  const tot = totals();
+  logEvent({type: "trade", side: "BUY", t, qty, px: p, value: qty * p,
+            cash: state.cash, total: tot.total, as_of: PX.as_of});
   markCurve(); save(); renderAll();
 }
 
@@ -296,6 +350,9 @@ function sell() {
   state.cash += proceeds;
   state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
                       side: "SELL", t, qty, px: p, fill: PX.as_of + " close" });
+  const tot = totals();
+  logEvent({type: "trade", side: "SELL", t, qty, px: p, value: qty * p,
+            cash: state.cash, total: tot.total, as_of: PX.as_of});
   markCurve(); save(); renderAll();
 }
 
@@ -306,14 +363,15 @@ function renderUniverse() {
   if (!q) { el.innerHTML = '<div style="cursor:default;color:var(--ink3)">Type to search the universe — e.g. "semis", "NVDA", "defense", "crypto".</div>'; return; }
   const hits = [];
   for (const [t, th] of Object.entries(PX.themes)) {
-    if (t.includes(q) || String(th).toUpperCase().includes(q)) {
+    if (t.includes(q) || String(th).toUpperCase().includes(q) ||
+        nameOf(t).toUpperCase().includes(q)) {
       hits.push([t, th]);
       if (hits.length >= 60) break;
     }
   }
   el.innerHTML = hits.map(([t, th]) => {
     const p = price(t);
-    return `<div data-t="${esc(t)}"><span><b class="mono">${esc(t)}</b> <span style="color:var(--ink3)">${esc(th)}</span></span><span class="mono">${p!=null?"$"+fmt2(p):"—"}</span></div>`;
+    return `<div data-t="${esc(t)}"><span><b class="mono">${esc(t)}</b> ${esc(nameOf(t))} <span style="color:var(--ink3)">${esc(th)}</span></span><span class="mono">${p!=null?"$"+fmt2(p):"—"}</span></div>`;
   }).join("") || '<div style="cursor:default;color:var(--ink3)">No matches.</div>';
   el.querySelectorAll("div[data-t]").forEach(x => x.addEventListener("click", () => {
     document.getElementById("ticker").value = x.dataset.t; quote();
@@ -329,11 +387,15 @@ async function init() {
     PX = await r.json();
     document.getElementById("asof").textContent =
       `Fills at ${PX.as_of} closes · ${Object.keys(PX.prices).length} tradeable tickers · account stored in this browser`;
+    const dl = document.getElementById("unidata");
+    dl.innerHTML = Object.keys(PX.themes).sort().map(t =>
+      `<option value="${t}">${esc(nameOf(t) || PX.themes[t] || "")}</option>`).join("");
   } catch (e) {
     document.getElementById("asof").textContent = "Price file failed to load — refresh, or tell whoever runs this.";
   }
   markCurve();
   renderAll(); renderUniverse();
+  discoverSimApi();
 }
 
 document.getElementById("buyBtn").addEventListener("click", buy);
