@@ -66,6 +66,7 @@
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
   <div class="spacer"></div>
   <span class="status" id="clock"></span>
+  <button id="alertBtn" title="Browser notification when any trader places a trade">🔔 Alerts: off</button>
   <a class="tab" href="index.html">Trader view →</a>
   <button id="refreshBtn">Refresh</button>
 </header>
@@ -78,6 +79,9 @@
       <th>vs SPY</th><th>Cash</th><th>Positions</th><th>Trades</th><th>Last active</th>
     </tr></thead><tbody id="boardBody"></tbody>
   </table></div>
+
+  <h2>Equity curves — indexed to 100 at each trader's start</h2>
+  <div class="wrap" style="padding:14px"><div id="curve"></div></div>
 
   <h2>Positions by trader</h2>
   <div id="cards" class="cards"></div>
@@ -126,7 +130,7 @@ function aggregate(events){
   for(const e of events){
     const name = e.trader || "?";
     const T = traders[name] || (traders[name] = {name, lots:{}, trades:[], cash:START,
-                                                 spy0:null, lastTs:null, snaps:0});
+                                                 spy0:null, lastTs:null, snaps:0, curve:[]});
     if(e.ts && (!T.lastTs || e.ts > T.lastTs)) T.lastTs = e.ts;
     if(e.type === "trade" && e.t){
       const t=e.t, qty=+e.qty||0, px=+e.px||0, val=(e.value!=null?+e.value:qty*px);
@@ -144,6 +148,10 @@ function aggregate(events){
       T.snaps++;
       if(e.cash != null) T.cash = +e.cash;
       if(T.spy0 == null && e.spy != null) T.spy0 = +e.spy;
+      if(e.total != null){
+        const d = e.as_of || (e.ts||"").slice(0,10);
+        T.curve.push({d, v:+e.total, spy: e.spy!=null?+e.spy:null});
+      }
     }
   }
   const spyNow = price("SPY");
@@ -164,7 +172,7 @@ function aggregate(events){
     const spyPct = (T.spy0 && spyNow) ? (spyNow/T.spy0 - 1)*100 : null;
     const alpha = spyPct!=null ? plPct - spyPct : null;
     return {name:T.name, total, cash:T.cash, pl, plPct, spyPct, alpha,
-            nPos, nTrades:T.trades.length, lastTs:T.lastTs, holdings};
+            nPos, nTrades:T.trades.length, lastTs:T.lastTs, holdings, curve:T.curve};
   });
   rows.sort((a,b)=>b.total-a.total);
   return rows;
@@ -235,6 +243,84 @@ function renderFeed(events){
     </tr>`;}).join("");
 }
 
+const PALETTE = ["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#56d4dd","#ff7b72"];
+function renderCurves(rows){
+  const el = $("curve");
+  const series = rows.filter(r=>r.curve && r.curve.length>=1);
+  const dates = Array.from(new Set([].concat(...series.map(r=>r.curve.map(p=>p.d))))).sort();
+  if(dates.length < 2){
+    el.innerHTML = `<div class="empty">Equity curves appear once traders have marks on 2+ trading days — the sim marks once per day at the close.</div>`;
+    return;
+  }
+  const xi = d => dates.indexOf(d);
+  const W=900,H=240,PADL=44,PADR=96,PADT=12,PADB=22;
+  const xs = i => PADL + (W-PADL-PADR)*(i/(dates.length-1));
+  let ymin=100,ymax=100;
+  const lines=[];
+  series.forEach((r,idx)=>{
+    const c=r.curve.slice().sort((a,b)=>a.d<b.d?-1:1), v0=c[0].v||START;
+    const pts=c.map(p=>({x:xs(xi(p.d)),yv:p.v/v0*100}));
+    pts.forEach(p=>{ymin=Math.min(ymin,p.yv);ymax=Math.max(ymax,p.yv);});
+    lines.push({name:r.name,color:PALETTE[idx%PALETTE.length],pts,last:pts[pts.length-1].yv});
+  });
+  let spyLine=null;
+  const richest=series.slice().sort((a,b)=>b.curve.length-a.curve.length)[0];
+  if(richest){
+    const c=richest.curve.slice().sort((a,b)=>a.d<b.d?-1:1).filter(p=>p.spy!=null);
+    if(c.length>=2){
+      const s0=c[0].spy, pts=c.map(p=>({x:xs(xi(p.d)),yv:p.spy/s0*100}));
+      pts.forEach(p=>{ymin=Math.min(ymin,p.yv);ymax=Math.max(ymax,p.yv);});
+      spyLine={pts,last:pts[pts.length-1].yv};
+    }
+  }
+  const pad=(ymax-ymin)*0.15||2; ymin-=pad; ymax+=pad;
+  const ys=v=>PADT+(H-PADT-PADB)*(1-(v-ymin)/(ymax-ymin));
+  const path=pts=>"M"+pts.map(p=>`${p.x.toFixed(1)},${ys(p.yv).toFixed(1)}`).join(" L");
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet">`;
+  svg+=`<line x1="${PADL}" y1="${ys(100)}" x2="${W-PADR}" y2="${ys(100)}" stroke="#30363d" stroke-dasharray="3 3"/>`;
+  svg+=`<text x="${W-PADR+4}" y="${ys(100)+3}" fill="#6e7681" font-size="10">100</text>`;
+  if(spyLine){
+    svg+=`<path d="${path(spyLine.pts)}" fill="none" stroke="#8b949e" stroke-width="1.3" stroke-dasharray="4 3"/>`;
+    svg+=`<text x="${W-PADR+4}" y="${ys(spyLine.last)+3}" fill="#8b949e" font-size="10">SPY ${spyLine.last.toFixed(1)}</text>`;
+  }
+  lines.forEach(L=>{
+    svg+=`<path d="${path(L.pts)}" fill="none" stroke="${L.color}" stroke-width="1.8"/>`;
+    svg+=`<text x="${W-PADR+4}" y="${ys(L.last)+3}" fill="${L.color}" font-size="10">${esc(L.name).slice(0,11)} ${L.last.toFixed(1)}</text>`;
+  });
+  el.innerHTML = svg+"</svg>";
+}
+
+// ── Trade notifications (browser Notification API) ─────────────────────────
+let alertsOn=false, seenTrades=null;
+const tradeKey = e => (e.received||"")+"|"+(e.trader||"")+"|"+(e.t||"");
+function checkAlerts(events){
+  const trades=events.filter(e=>e.type==="trade");
+  if(seenTrades===null){ seenTrades=new Set(trades.map(tradeKey)); return; } // seed silently on first load
+  for(const e of trades){
+    const k=tradeKey(e);
+    if(seenTrades.has(k)) continue;
+    seenTrades.add(k);
+    if(alertsOn && "Notification" in window && Notification.permission==="granted"){
+      const sell=(e.side||"").toUpperCase()==="SELL";
+      const val=e.value!=null?+e.value:(+e.qty*+e.px);
+      new Notification(`${e.trader||"?"} ${sell?"SOLD":"BOUGHT"} ${e.t}`,
+        {body:`${qtyStr(e.qty)} @ $${(+e.px).toFixed(2)} = ${fmt$(val)}`});
+    }
+  }
+}
+async function toggleAlerts(){
+  if(!alertsOn){
+    if(!("Notification" in window)){ alert("This browser doesn't support notifications."); return; }
+    if(Notification.permission!=="granted"){
+      if(await Notification.requestPermission()!=="granted"){
+        alert("Notifications are blocked for this site — allow them in the browser to get trade alerts."); return;
+      }
+    }
+    alertsOn=true;
+  } else alertsOn=false;
+  $("alertBtn").textContent="🔔 Alerts: "+(alertsOn?"on":"off");
+}
+
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function setStatus(ok,msg){ const d=$("dot"); d.className="dot "+(ok?"ok":"bad"); $("statusText").textContent=msg; }
 
@@ -249,7 +335,8 @@ async function refresh(){
     const j = await r.json();
     const events = j.events || [];
     const rows = aggregate(events);
-    renderKpis(rows); renderBoard(rows); renderCards(rows); renderFeed(events);
+    renderKpis(rows); renderBoard(rows); renderCurves(rows); renderCards(rows); renderFeed(events);
+    checkAlerts(events);
     setStatus(true, `live · ${events.length} events · updated ${new Date().toLocaleTimeString()}`);
   }catch(e){
     setStatus(false, "can't reach desk API: " + e.message);
@@ -258,6 +345,7 @@ async function refresh(){
 
 function tick(){ $("clock").textContent = new Date().toLocaleString(); }
 $("refreshBtn").onclick = refresh;
+$("alertBtn").onclick = toggleAlerts;
 tick(); setInterval(tick, 1000);
 refresh(); setInterval(refresh, REFRESH_MS);
 </script>
