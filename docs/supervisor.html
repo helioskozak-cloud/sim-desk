@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sim Desk — Supervisor</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#0f141a; --border:#30363d;
+    --fg:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+    --pos:#3fb950; --neg:#f85149; --blue:#58a6ff; --amber:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:"IBM Plex Sans",-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px}
+  header{position:sticky;top:0;z-index:5;background:var(--bg);
+         border-bottom:1px solid var(--border);padding:14px 20px;
+         display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
+  header h1 .mono{color:var(--dim);font-weight:400}
+  .status{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim)}
+  .dot.ok{background:var(--pos);box-shadow:0 0 6px var(--pos)}
+  .dot.bad{background:var(--neg);box-shadow:0 0 6px var(--neg)}
+  .spacer{flex:1}
+  button{background:var(--panel);color:var(--fg);border:1px solid var(--border);
+         border-radius:7px;padding:6px 12px;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--dim)}
+  main{padding:18px 20px;max-width:1200px;margin:0 auto}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);
+     margin:26px 0 10px;font-weight:600}
+  .wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;min-width:640px}
+  th,td{padding:9px 12px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;
+     position:sticky;top:0;background:var(--panel2)}
+  td:first-child,th:first-child{text-align:left}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#1c2430}
+  .mono{font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+  .pos{color:var(--pos)} .neg{color:var(--neg)} .muted{color:var(--muted)} .dim{color:var(--dim)}
+  .rank{color:var(--dim);width:26px}
+  .name{font-weight:600}
+  .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600}
+  .buy{background:rgba(63,185,80,.15);color:var(--pos)}
+  .sell{background:rgba(248,81,73,.15);color:var(--neg)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+  .card{border:1px solid var(--border);border-radius:10px;background:var(--panel);padding:13px 15px}
+  .card h3{margin:0 0 3px;font-size:14.5px}
+  .card .sub{color:var(--muted);font-size:12px;margin-bottom:10px}
+  .card table{min-width:0}
+  .card th,.card td{padding:5px 6px;font-size:12.5px}
+  .feed{max-height:420px;overflow-y:auto}
+  .empty{color:var(--dim);padding:26px;text-align:center}
+  .big{font-size:15px}
+  .barrow{display:flex;gap:6px;align-items:baseline}
+  a.tab{color:var(--muted);text-decoration:none;font-size:13px;border:1px solid var(--border);
+        border-radius:7px;padding:6px 12px}
+  a.tab:hover{border-color:var(--dim);color:var(--fg)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sim Desk <span class="mono">/ supervisor</span></h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+  <div class="spacer"></div>
+  <span class="status" id="clock"></span>
+  <a class="tab" href="index.html">Trader view →</a>
+  <button id="refreshBtn">Refresh</button>
+</header>
+<main>
+  <div id="kpis" class="barrow" style="gap:22px;flex-wrap:wrap;margin-bottom:4px"></div>
+  <h2>Leaderboard</h2>
+  <div class="wrap"><table id="board">
+    <thead><tr>
+      <th>#</th><th>Trader</th><th>Account value</th><th>P&amp;L $</th><th>Return</th>
+      <th>vs SPY</th><th>Cash</th><th>Positions</th><th>Trades</th><th>Last active</th>
+    </tr></thead><tbody id="boardBody"></tbody>
+  </table></div>
+
+  <h2>Positions by trader</h2>
+  <div id="cards" class="cards"></div>
+
+  <h2>Live trade feed</h2>
+  <div class="wrap feed"><table>
+    <thead><tr><th>Time</th><th>Trader</th><th>Action</th><th>Ticker</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
+    <tbody id="feedBody"></tbody>
+  </table></div>
+  <p class="dim" style="font-size:12px;margin-top:18px">
+    Paper-trading telemetry. Positions are marked at the latest EOD prices the trader app uses
+    (<span id="pxDate" class="mono">—</span>); values match what each trader sees. Auto-refreshes every 20s.
+  </p>
+</main>
+
+<script>
+const EP_FILE = "https://helioskozak-cloud.github.io/regime-desk/api_endpoint.json";
+const START = 100000;
+const REFRESH_MS = 20000;
+let PX = null, apiBase = null;
+
+const $ = id => document.getElementById(id);
+const fmt$ = v => (v<0?"-":"")+"$"+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
+const fmtPct = v => (v>=0?"+":"")+v.toFixed(2)+"%";
+const cls = v => v>=0?"pos":"neg";
+const qtyStr = q => (+q).toFixed(4).replace(/\.?0+$/,"");
+
+async function resolveBase(){
+  try{
+    const r = await fetch(EP_FILE + "?_=" + Date.now(), {signal:AbortSignal.timeout(4000)});
+    if(r.ok){ const j = await r.json(); if(j.url) return j.url.replace(/\/$/,""); }
+  }catch(e){}
+  return null;
+}
+
+async function loadPrices(){
+  try{
+    const r = await fetch("data/prices.json?_=" + Date.now(), {signal:AbortSignal.timeout(5000)});
+    if(r.ok) PX = await r.json();
+  }catch(e){}
+}
+const price = t => (PX && PX.prices && PX.prices[t] != null) ? PX.prices[t] : null;
+
+function aggregate(events){
+  const traders = {};
+  for(const e of events){
+    const name = e.trader || "?";
+    const T = traders[name] || (traders[name] = {name, lots:{}, trades:[], cash:START,
+                                                 spy0:null, lastTs:null, snaps:0});
+    if(e.ts && (!T.lastTs || e.ts > T.lastTs)) T.lastTs = e.ts;
+    if(e.type === "trade" && e.t){
+      const t=e.t, qty=+e.qty||0, px=+e.px||0, val=(e.value!=null?+e.value:qty*px);
+      const L = T.lots[t] || (T.lots[t] = {qty:0, cost:0});
+      if((e.side||"").toUpperCase()==="SELL"){
+        const avg = L.qty>0 ? L.cost/L.qty : px;
+        L.qty -= qty; L.cost -= avg*qty;
+        if(L.qty < 1e-6){ delete T.lots[t]; }
+      } else {
+        L.qty += qty; L.cost += val;
+      }
+      T.trades.push(e);
+      if(e.cash != null) T.cash = +e.cash;
+    } else if(e.type === "snapshot"){
+      T.snaps++;
+      if(e.cash != null) T.cash = +e.cash;
+      if(T.spy0 == null && e.spy != null) T.spy0 = +e.spy;
+    }
+  }
+  const spyNow = price("SPY");
+  const rows = Object.values(traders).map(T=>{
+    let pos = 0, nPos = 0;
+    const holdings = [];
+    for(const [t,L] of Object.entries(T.lots)){
+      if(L.qty < 1e-6) continue;
+      const p = price(t);
+      const mv = p!=null ? L.qty*p : L.cost;   // fall back to cost if unpriced
+      pos += mv; nPos++;
+      holdings.push({t, qty:L.qty, avg:L.cost/L.qty, px:p, mv,
+                     pl: (p!=null ? mv - L.cost : 0)});
+    }
+    holdings.sort((a,b)=>b.mv-a.mv);
+    const total = pos + T.cash;
+    const pl = total - START, plPct = pl/START*100;
+    const spyPct = (T.spy0 && spyNow) ? (spyNow/T.spy0 - 1)*100 : null;
+    const alpha = spyPct!=null ? plPct - spyPct : null;
+    return {name:T.name, total, cash:T.cash, pl, plPct, spyPct, alpha,
+            nPos, nTrades:T.trades.length, lastTs:T.lastTs, holdings};
+  });
+  rows.sort((a,b)=>b.total-a.total);
+  return rows;
+}
+
+function renderKpis(rows){
+  const n = rows.length;
+  const best = rows[0];
+  const totTrades = rows.reduce((s,r)=>s+r.nTrades,0);
+  $("kpis").innerHTML =
+    `<div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.6px">Traders</div><div class="big mono">${n}</div></div>`+
+    `<div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.6px">Total trades</div><div class="big mono">${totTrades}</div></div>`+
+    (best?`<div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.6px">Leader</div><div class="big"><span class="name">${esc(best.name)}</span> <span class="mono ${cls(best.pl)}">${fmtPct(best.plPct)}</span></div></div>`:"");
+}
+
+function renderBoard(rows){
+  const tb = $("boardBody");
+  if(!rows.length){ tb.innerHTML = `<tr><td colspan="10" class="empty">No trader activity yet.</td></tr>`; return; }
+  tb.innerHTML = rows.map((r,i)=>`<tr>
+    <td class="rank mono">${i+1}</td>
+    <td class="name">${esc(r.name)}</td>
+    <td class="mono big">${fmt$(r.total)}</td>
+    <td class="mono ${cls(r.pl)}">${(r.pl>=0?"+":"")+fmt$(r.pl).replace("$","$")}</td>
+    <td class="mono ${cls(r.pl)}">${fmtPct(r.plPct)}</td>
+    <td class="mono ${r.alpha==null?"dim":cls(r.alpha)}">${r.alpha==null?"—":(r.alpha>=0?"+":"")+r.alpha.toFixed(2)+"pp"}</td>
+    <td class="mono muted">${fmt$(r.cash)}</td>
+    <td class="mono">${r.nPos}</td>
+    <td class="mono">${r.nTrades}</td>
+    <td class="dim mono">${r.lastTs? r.lastTs.replace("T"," ") : "—"}</td>
+  </tr>`).join("");
+}
+
+function renderCards(rows){
+  const el = $("cards");
+  const withPos = rows.filter(r=>r.holdings.length);
+  if(!withPos.length){ el.innerHTML = `<div class="empty">No open positions yet.</div>`; return; }
+  el.innerHTML = withPos.map(r=>`
+    <div class="card">
+      <h3>${esc(r.name)}</h3>
+      <div class="sub">${fmt$(r.total)} · <span class="${cls(r.pl)}">${fmtPct(r.plPct)}</span> · cash ${fmt$(r.cash)}</div>
+      <table><thead><tr><th>Ticker</th><th>Qty</th><th>Avg</th><th>Last</th><th>Value</th><th>P&amp;L</th></tr></thead>
+      <tbody>${r.holdings.map(h=>`<tr>
+        <td class="name">${esc(h.t)}</td>
+        <td class="mono">${qtyStr(h.qty)}</td>
+        <td class="mono muted">$${h.avg.toFixed(2)}</td>
+        <td class="mono ${h.px==null?"dim":""}">${h.px==null?"—":"$"+h.px.toFixed(2)}</td>
+        <td class="mono">${fmt$(h.mv)}</td>
+        <td class="mono ${h.px==null?"dim":cls(h.pl)}">${h.px==null?"—":(h.pl>=0?"+":"")+fmt$(h.pl)}</td>
+      </tr>`).join("")}</tbody></table>
+    </div>`).join("");
+}
+
+function renderFeed(events){
+  const trades = events.filter(e=>e.type==="trade").slice(-40).reverse();
+  const tb = $("feedBody");
+  if(!trades.length){ tb.innerHTML = `<tr><td colspan="7" class="empty">No trades yet.</td></tr>`; return; }
+  tb.innerHTML = trades.map(e=>{
+    const sell = (e.side||"").toUpperCase()==="SELL";
+    const val = e.value!=null?+e.value:(+e.qty*+e.px);
+    return `<tr>
+      <td class="dim mono">${(e.ts||"").replace("T"," ")}</td>
+      <td class="name">${esc(e.trader||"?")}</td>
+      <td><span class="pill ${sell?"sell":"buy"}">${sell?"SELL":"BUY"}</span></td>
+      <td class="name mono">${esc(e.t||"")}</td>
+      <td class="mono">${qtyStr(e.qty)}</td>
+      <td class="mono muted">$${(+e.px).toFixed(2)}</td>
+      <td class="mono">${fmt$(val)}</td>
+    </tr>`;}).join("");
+}
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function setStatus(ok,msg){ const d=$("dot"); d.className="dot "+(ok?"ok":"bad"); $("statusText").textContent=msg; }
+
+async function refresh(){
+  if(!PX) await loadPrices();
+  if(PX && PX.as_of) $("pxDate").textContent = PX.as_of;
+  if(!apiBase) apiBase = await resolveBase();
+  if(!apiBase){ setStatus(false,"desk API offline (tunnel not published)"); return; }
+  try{
+    const r = await fetch(apiBase + "/api/sim/feed?limit=4000&_=" + Date.now(), {signal:AbortSignal.timeout(8000)});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j = await r.json();
+    const events = j.events || [];
+    const rows = aggregate(events);
+    renderKpis(rows); renderBoard(rows); renderCards(rows); renderFeed(events);
+    setStatus(true, `live · ${events.length} events · updated ${new Date().toLocaleTimeString()}`);
+  }catch(e){
+    setStatus(false, "can't reach desk API: " + e.message);
+  }
+}
+
+function tick(){ $("clock").textContent = new Date().toLocaleString(); }
+$("refreshBtn").onclick = refresh;
+tick(); setInterval(tick, 1000);
+refresh(); setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>
