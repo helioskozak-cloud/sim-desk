@@ -4,16 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sim Desk — Paper Trading</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{--bg:#010409;--surface:#0d1117;--panel:#161b22;--border:#30363d;
         --ink:#e6edf3;--ink2:#8b949e;--ink3:#6e7681;--blue:#58a6ff;
         --green:#3fb950;--red:#f85149;--amber:#e3b341;}
   *{box-sizing:border-box;margin:0}
   body{background:var(--bg);color:var(--ink);
-       font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif;
+       font:14px/1.5 'IBM Plex Sans',-apple-system,"Segoe UI",system-ui,sans-serif;
        max-width:1080px;margin:0 auto;padding:28px 16px 70px}
-  .mono{font-family:ui-monospace,Consolas,monospace}
-  .eyebrow{font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  .mono{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
+  .eyebrow{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11px;
            letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
   h1{font-size:22px;margin:2px 0 4px}
   .sub{color:var(--ink2);font-size:12.5px;margin-bottom:18px}
@@ -21,13 +24,13 @@
   .tile{background:var(--surface);border:1px solid var(--border);border-radius:8px;
         padding:10px 14px;flex:1;min-width:140px}
   .tile .k{color:var(--ink3);font-size:10px;text-transform:uppercase;letter-spacing:.6px}
-  .tile .v{font-size:20px;font-weight:700;font-family:ui-monospace,Consolas,monospace}
+  .tile .v{font-size:20px;font-weight:700;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
   .tile .d{font-size:11px;color:var(--ink2)}
   .row{display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap}
   input,select,button{background:var(--panel);border:1px solid var(--border);
         border-radius:8px;color:var(--ink);padding:9px 12px;font-size:14px}
   input:focus,select:focus{outline:none;border-color:var(--blue)}
-  #ticker{width:150px;text-transform:uppercase;font-family:ui-monospace,Consolas,monospace}
+  #ticker{width:150px;text-transform:uppercase;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
   #amount{width:130px}
   button{cursor:pointer;font-weight:600}
   #buyBtn{background:#238636;border-color:#238636;color:#fff}
