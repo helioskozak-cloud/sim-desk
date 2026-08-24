@@ -35,10 +35,21 @@ SPY itself is stale.
 ## Tests
 
 ```
-node tests/check.mjs
+python -m pytest tests/test_fetch_prices.py -q     # the merge + carry-forward logic
+node tests/check.mjs                               # the front end
 ```
 
-Runs `docs/index.html`'s real page script under Node against the committed
-price file — no browser, no build step, no dependencies. It extracts the
-`<script>` block rather than duplicating it, so it cannot pass against a copy
-of logic that never shipped.
+`check.mjs` runs `docs/index.html`'s real page script under Node against the
+committed price file — no browser, no build step, no dependencies. It extracts
+the `<script>` block rather than duplicating it, so it cannot pass against a
+copy of logic that never shipped.
+
+`test_fetch_prices.py` stubs the download and the sector-map request, so it is
+a statement about the merge logic and touches no network.
+
+Both run in CI after the push — never before, because carrying a missing close
+forward makes the file safe to publish however badly the fetch went. A red test
+should surface the problem, not withhold the day's prices.
+
+Every assertion in both was mutation-tested: 23 mutants planted across
+`fetch_prices.py` and `index.html`, all 23 killed.

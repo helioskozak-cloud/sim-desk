@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install yfinance pandas requests
+      - run: pip install yfinance pandas requests pytest
       - run: python scan/fetch_prices.py
       - name: Commit and push
         run: |
@@ -32,12 +32,18 @@ jobs:
           git pull --rebase origin main
           git push
 
-      # Drives the real page script against the file we just published, so a
-      # payload the front end cannot read (a missing `stale` map, a renamed
-      # key) fails here rather than in an intern's browser. After the push for
-      # the same reason as the gate below.
-      - name: Front-end contract
-        run: node tests/check.mjs
+      # Both suites run AFTER the push, for the same reason as the gate below:
+      # carrying a missing close forward makes the file safe to publish however
+      # badly the fetch went, so a red test should surface the problem, not
+      # withhold the day's prices.
+      #
+      # check.mjs drives the real page script against the file we just
+      # published, so a payload the front end cannot read (a missing `stale`
+      # map, a renamed key) fails here rather than in an intern's browser.
+      - name: Tests
+        run: |
+          python -m pytest tests/test_fetch_prices.py -q
+          node tests/check.mjs
 
       # Runs AFTER the push on purpose. Carrying a missing close forward makes
       # the file safe to publish no matter how bad the fetch was, so withholding

@@ -149,8 +149,8 @@ def _drop_open_session() -> pd.Timestamp | None:
     return None if now.hour >= 21 else now.normalize().tz_localize(None)
 
 
-def fetch_closes(tickers: list[str]) -> dict[str, tuple[pd.Timestamp, float, float]]:
-    """{ticker: (its own last close DATE, last close, prior close)}.
+def fetch_closes(tickers: list[str]) -> dict[str, tuple[pd.Timestamp, float, float, pd.Timestamp]]:
+    """{ticker: (its own last close DATE, last close, prior close, prior DATE)}.
 
     Downloaded in chunks with retries. A chunk that will not come back after
     RETRIES attempts leaves its tickers absent from the result — the caller
@@ -159,7 +159,7 @@ def fetch_closes(tickers: list[str]) -> dict[str, tuple[pd.Timestamp, float, flo
     The date is per ticker, taken from that column's own last non-null entry,
     so a name that stopped trading on Tuesday is dated Tuesday instead of
     inheriting the run's date and looking current."""
-    out: dict[str, tuple[pd.Timestamp, float, float]] = {}
+    out: dict[str, tuple[pd.Timestamp, float, float, pd.Timestamp]] = {}
     open_session = _drop_open_session()
     if open_session is not None:
         print(f"session still open — excluding {open_session.date()} rows; the "
@@ -191,7 +191,8 @@ def fetch_closes(tickers: list[str]) -> dict[str, tuple[pd.Timestamp, float, flo
                 continue
             last = float(s.iloc[-1])
             prior = float(s.iloc[-2]) if len(s) > 1 else last
-            out[str(col).upper()] = (s.index[-1], last, prior)
+            prior_d = s.index[-2] if len(s) > 1 else s.index[-1]
+            out[str(col).upper()] = (s.index[-1], last, prior, prior_d)
             got += 1
         print(f"  chunk {n}/{len(batches)}: {got}/{len(batch)} priced", flush=True)
     return out
@@ -209,9 +210,15 @@ def main() -> None:
     # The run's date is the newest close anyone reported. A ticker whose own
     # last close predates it is stale — whether it was missed by a chunk, has
     # been halted, or was carried over from the previous file.
-    dates = sorted({d.normalize() for d, _, _ in fresh.values()})
+    dates = sorted({d.normalize() for d, _, _, _ in fresh.values()})
     as_of = dates[-1] if dates else None
-    prev_date = dates[-2] if len(dates) > 1 else None
+    # The session before as_of, taken from the PRIOR dates of the tickers that
+    # actually traded on as_of. Not `dates[-2]`: that is the second-newest LAST
+    # date across the universe, so one halted name dated 08-20 would report
+    # 08-20 as the previous session when it was 08-21.
+    prior_dates = sorted({pd_.normalize() for d, _, _, pd_ in fresh.values()
+                          if d.normalize() == as_of and pd_.normalize() < as_of})
+    prev_date = prior_dates[-1] if prior_dates else None
 
     old_prices = prev_file.get("prices", {})
     old_prev = prev_file.get("prev", {})
@@ -239,7 +246,7 @@ def main() -> None:
         fresh_n = 0
         for t in tickers:
             if t in fresh:
-                d, last, prior = fresh[t]
+                d, last, prior, _ = fresh[t]
                 prices[t] = round(last, 4)
                 prev[t] = round(prior, 4)
                 if d.normalize() < as_of:
