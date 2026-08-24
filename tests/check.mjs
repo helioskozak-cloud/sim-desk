@@ -79,6 +79,10 @@ const NOMARK = { MSFT: { qty: 100, cost: 40000 }, EA: { qty: 300, cost: 30000 } 
   ok("stale: last close still shown", cell(staleRow, 5).includes("$77.57"));
   ok("stale: P&L computed off the real close, not zeroed",
      cell(staleRow, 8).includes("$") && !cell(staleRow, 8).includes("+$0<"));
+  // A missing number is not a loss. Both of these fell through to .neg and
+  // painted an em dash red.
+  ok("stale: the suppressed day change is dim, not red",
+     /class="dim"/.test(staleRow.split("<td")[6]), staleRow.split("<td")[6]);
 }
 
 // ------------------------------------------------------------- no mark at all
@@ -94,6 +98,12 @@ const NOMARK = { MSFT: { qty: 100, cost: 40000 }, EA: { qty: 300, cost: 30000 } 
   const h = els.positions.innerHTML;
   ok("nomark: row flagged", h.includes("badge nomark") && h.includes("no mark"));
   ok("nomark: value labelled as cost", h.includes(">cost<"));
+  const nmRow = h.split("<tr ").find(r => r.startsWith('class="nomark"'));
+  ok("nomark: the empty P&L is dim, not red",
+     /class="dim"/.test(nmRow.split("<td")[8]), nmRow.split("<td")[8]);
+  ok("nomark: red is still used where there IS a loss",
+     /class="neg"/.test(h) || !/-\$/.test(h),
+     "mutation guard -- dim must not have swallowed the loss colour");
   ok("nomark: notice is the hard one", h.includes("notice bad") && h.includes("no close at all"));
   ok("nomark: reassures nothing was sold", h.includes("Nothing has been sold"));
   const tiles = els.tiles.innerHTML;

@@ -64,8 +64,10 @@
      so instead of scrolling like every other table here it crushed six numeric
      columns into ~260px. Widened to 400, and `min(100%, …)` so a phone gets
      one full-width card instead of a horizontal scrollbar on the whole page. */
+  /* align-items:start, or grid stretches every card to the tallest in its row
+     and a trader holding four names gets the dead space of one holding six. */
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));
-         gap:12px}
+         gap:12px;align-items:start}
   /* Grid children default to min-width:auto, which lets a wide table push the
      track past its share. This is what makes the scroll wrapper below work. */
   .card{border:1px solid var(--border);border-radius:10px;background:var(--panel);
@@ -313,17 +315,55 @@ function renderCurves(rows){
   const ys=v=>PADT+(H-PADT-PADB)*(1-(v-ymin)/(ymax-ymin));
   const path=pts=>"M"+pts.map(p=>`${p.x.toFixed(1)},${ys(p.yv).toFixed(1)}`).join(" L");
   let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet">`;
+  // Baseline label on the LEFT. It used to sit in the right-hand label column
+  // with the series names, where any trader flat at 100 landed on top of it.
   svg+=`<line x1="${PADL}" y1="${ys(100)}" x2="${W-PADR}" y2="${ys(100)}" stroke="#30363d" stroke-dasharray="3 3"/>`;
-  svg+=`<text x="${W-PADR+4}" y="${ys(100)+3}" fill="#6e7681" font-size="10">100</text>`;
+  svg+=`<text x="${PADL-6}" y="${ys(100)+3}" text-anchor="end" fill="#6e7681" font-size="10">100</text>`;
+
+  // Draw every path first, then place the right-hand labels together, because
+  // they have to be de-collided against each other.
+  const labels=[];
   if(spyLine){
     svg+=`<path d="${path(spyLine.pts)}" fill="none" stroke="#8b949e" stroke-width="1.3" stroke-dasharray="4 3"/>`;
-    svg+=`<text x="${W-PADR+4}" y="${ys(spyLine.last)+3}" fill="#8b949e" font-size="10">SPY ${spyLine.last.toFixed(1)}</text>`;
+    labels.push({y:ys(spyLine.last), color:"#8b949e", text:`SPY ${spyLine.last.toFixed(1)}`});
   }
   lines.forEach(L=>{
     svg+=`<path d="${path(L.pts)}" fill="none" stroke="${L.color}" stroke-width="1.8"/>`;
-    svg+=`<text x="${W-PADR+4}" y="${ys(L.last)+3}" fill="${L.color}" font-size="10">${esc(L.name).slice(0,11)} ${L.last.toFixed(1)}</text>`;
+    labels.push({y:ys(L.last), color:L.color,
+                 text:`${esc(L.name).slice(0,11)} ${L.last.toFixed(1)}`});
   });
+  svg+=labelColumn(labels, W-PADR+4, H);
+
   el.innerHTML = svg+"</svg>";
+}
+
+// Right-hand series labels, nudged apart so they stay readable when two lines
+// finish close together. Traders cluster near 100 by design — the chart indexes
+// every account to 100 at its own start — so overlapping end labels are the
+// normal case here, not an edge case, and two names printed on top of each
+// other is unreadable exactly when the race is closest.
+//
+// Greedy single pass: sort by the y the label WANTS, push each one down to
+// clear the previous, then if the stack has run past the bottom, shift the
+// whole column back up. Anything that moved gets a leader line back to its
+// true height, so the label still says which line it belongs to.
+function labelColumn(labels, x, H, gap=11){
+  if(!labels.length) return "";
+  const L = labels.slice().sort((a,b)=>a.y-b.y);
+  L.forEach((l,i)=>{ l.at = i ? Math.max(l.y, L[i-1].at+gap) : l.y; });
+  const over = L[L.length-1].at - (H-4);
+  if(over > 0){
+    // Pull the column up, but never above the top edge, and keep the gaps.
+    L.forEach(l=>{ l.at -= over; });
+    L.forEach((l,i)=>{ l.at = i ? Math.max(l.at, L[i-1].at+gap) : Math.max(l.at, 9); });
+  }
+  return L.map(l=>{
+    const moved = Math.abs(l.at - l.y) > 1.5;
+    const leader = moved
+      ? `<line x1="${(x-4).toFixed(1)}" y1="${l.y.toFixed(1)}" x2="${(x-1).toFixed(1)}" y2="${l.at.toFixed(1)}" stroke="${l.color}" stroke-width=".8" opacity=".5"/>`
+      : "";
+    return leader+`<text x="${x}" y="${(l.at+3).toFixed(1)}" fill="${l.color}" font-size="10">${l.text}</text>`;
+  }).join("");
 }
 
 // ── Trade notifications (browser Notification API) ─────────────────────────

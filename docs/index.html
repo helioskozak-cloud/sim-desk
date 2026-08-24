@@ -53,6 +53,9 @@
      font-variant-numeric:tabular-nums}
   th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
   .pos{color:var(--green)}.neg{color:var(--red)}
+  /* "no value" is not a loss. Without this, a null return fell through to
+     .neg and an em dash was painted red. */
+  .dim{color:var(--ink3)}
   .sellrow{color:var(--blue);cursor:pointer;text-decoration:underline}
   #chart{width:100%}
   .foot{color:var(--ink3);font-size:11px;margin-top:6px}
@@ -385,9 +388,9 @@ function renderPositions() {
     rows += `<tr class="${cls}"><td class="mono"><b>${esc(t)}</b>${badge}</td><td style="color:var(--ink3)">${esc((PX.themes[t]||"—"))}</td>
       <td>${lot.qty.toFixed(4).replace(/\.?0+$/,"")}</td><td>$${fmt2(avg)}</td>
       <td>${p!=null?"$"+fmt2(p):"—"}</td>
-      <td class="${chg>=0?"pos":"neg"}">${chg!=null?(chg>=0?"+":"")+chg.toFixed(2)+"%":"—"}</td>
+      <td class="${chg==null?"dim":chg>=0?"pos":"neg"}">${chg!=null?(chg>=0?"+":"")+chg.toFixed(2)+"%":"—"}</td>
       <td>${fmt$(mv)}${p==null?'<span class="badge nomark" title="Cost basis standing in for a market value.">cost</span>':""}</td>
-      <td class="${pl>=0?"pos":"neg"}">${pl!=null?(pl>=0?"+":"")+fmt$(pl)+(plp!=null?" ("+(plp>=0?"+":"")+plp.toFixed(1)+"%)":""):"—"}</td>
+      <td class="${pl==null?"dim":pl>=0?"pos":"neg"}">${pl!=null?(pl>=0?"+":"")+fmt$(pl)+(plp!=null?" ("+(plp>=0?"+":"")+plp.toFixed(1)+"%)":""):"—"}</td>
       <td><span class="sellrow" data-t="${esc(t)}">sell</span></td></tr>`;
   }
   const note = (nStale || nNoMark) ? positionsNotice(nStale, nNoMark) : "";
