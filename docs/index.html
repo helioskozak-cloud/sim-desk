@@ -59,6 +59,21 @@
   #resetBtn{background:none;border:1px solid var(--border);color:var(--ink3);
             font-size:12px;padding:5px 10px}
   .empty{color:var(--ink3);padding:14px 0;font-size:13px}
+  /* Stale / unpriced marks. Amber, never red: the price is real, it is just
+     not from this session. Red is reserved for a position carrying no mark
+     at all. */
+  .badge{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:9.5px;
+         letter-spacing:.04em;text-transform:uppercase;border-radius:4px;
+         padding:1px 5px;margin-left:6px;white-space:nowrap;cursor:help}
+  .badge.stale{background:#3a2d0b;color:var(--amber);border:1px solid #5a4610}
+  .badge.nomark{background:#3a1113;color:var(--red);border:1px solid #6b1d20}
+  tr.stale td{background:rgba(227,179,65,.045)}
+  tr.nomark td{background:rgba(248,81,73,.05)}
+  .notice{border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:12px;
+          border:1px solid;line-height:1.55}
+  .notice.warn{background:rgba(227,179,65,.07);border-color:#5a4610;color:#e8d9a8}
+  .notice.bad{background:rgba(248,81,73,.07);border-color:#6b1d20;color:#f0b7b4}
+  .notice b{color:var(--ink)}
   #uniList{max-height:210px;overflow-y:auto;font-size:12.5px}
   #uniList div{padding:4px 6px;cursor:pointer;border-radius:5px;display:flex;justify-content:space-between}
   #uniList div:hover{background:var(--panel)}
@@ -108,8 +123,11 @@
 <div class="foot">
   Training simulator. Orders fill at the most recent <b>daily close</b> in the published
   price file — there is no intraday execution, no commissions, no shorting, no margin.
-  Universe = the ~1,380 stocks &amp; ETFs regime-desk tracks. Your account lives in THIS
-  browser's storage only. Educational use; not investment advice.
+  Universe = the stocks &amp; ETFs regime-desk tracks. Your account lives in THIS
+  browser's storage only. A price the feed could not refresh is carried forward and
+  <b>marked with its own date</b> rather than dropped; a position with no price at all
+  is shown at cost basis, labelled, and keeps the day off the equity curve.
+  Educational use; not investment advice.
 </div>
 
 <script>
@@ -130,6 +148,29 @@ function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
 function price(t) { return PX && PX.prices[t] != null ? PX.prices[t] : null; }
 function nameOf(t) { return (PX && PX.names && PX.names[t]) || ""; }
+
+// --- stale marks -----------------------------------------------------------
+// A price can be real but not from today's session: a chunk of the download
+// failed and yesterday's close was carried forward, or the name is halted.
+// staleAt(t) returns the date THAT ticker's price is from, or null when it is
+// from PX.as_of like the rest of the file.
+//
+// This exists because of 2026-08-20. The universe grew to 2,471 tickers, the
+// price fetch could not carry that many in one request, and 1,058 tickers
+// silently vanished from prices.json — MSFT, AMZN, TSLA and BRK-B among them.
+// totals() used to fall back to a position's COST when it could not price it,
+// so a third of every book quietly re-marked to cost basis, the account value
+// dropped by exactly the gain that had been erased, and markCurve() wrote that
+// number into the equity curve, where it is permanent. A feed gap became
+// corrupted history.
+//
+// Two rules now, and the second is the one that mattered:
+//   * a stale price is still shown, marked, with its own date — it is a real
+//     close, just not today's;
+//   * an INCOMPLETE mark is never written to the curve. A curve point is
+//     permanent, so it has to be worth keeping.
+function staleAt(t) { return (PX && PX.stale && PX.stale[t]) || null; }
+function priced(t) { return price(t) != null; }
 
 // --- telemetry: trades + daily snapshots go to the desk's API so the boss
 // --- can review activity. Queued in localStorage when the API is offline.
@@ -184,19 +225,41 @@ function fmt2(v) { return v.toLocaleString(undefined, {minimumFractionDigits: 2,
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
 function totals() {
-  let pos = 0;
+  let pos = 0, unpriced = 0, staleMV = 0;
   for (const [t, lot] of Object.entries(state.lots)) {
     const p = price(t);
-    pos += p != null ? lot.qty * p : lot.cost; // unpriceable falls back to cost
+    if (p == null) {
+      // No price ANYWHERE — not even a carried-forward one. Cost basis is the
+      // only number left, but it is a placeholder, not a mark, so the caller
+      // is told rather than being handed a total that looks complete.
+      pos += lot.cost;
+      unpriced++;
+    } else {
+      pos += lot.qty * p;
+      if (staleAt(t)) staleMV += lot.qty * p;
+    }
   }
-  return { pos, total: pos + state.cash };
+  return { pos, total: pos + state.cash, unpriced, staleMV };
 }
 
 function markCurve() {
   if (!PX) return;
   const spy = price("SPY");
-  if (state.spy0 == null && spy != null) state.spy0 = spy;
+  if (state.spy0 == null && spy != null && !staleAt("SPY")) state.spy0 = spy;
   const t = totals();
+
+  // A curve point is permanent and the vs-SPY number is measured off it, so it
+  // is only written when the mark behind it is complete: every position priced,
+  // and a SPY close from this same session. Skipping a day leaves a gap the
+  // chart draws straight through — far better than baking in a total that was
+  // partly cost basis, which is what happened on 08-20 and 08-21.
+  if (t.unpriced > 0 || spy == null || staleAt("SPY")) {
+    state.curveSkipped = PX.as_of;
+    save();
+    return;
+  }
+  delete state.curveSkipped;
+
   const last = state.curve[state.curve.length - 1];
   if (!last || last.d !== PX.as_of) {
     state.curve.push({ d: PX.as_of, v: t.total, spy: spy });
@@ -213,41 +276,81 @@ function renderTiles() {
   const spyPct = (state.spy0 && spy) ? (spy / state.spy0 - 1) * 100 : null;
   const alpha = spyPct != null ? plPct - spyPct : null;
   const cls = v => v >= 0 ? "pos" : "neg";
+  // Account value and P&L are the tiles that moved when 1,058 tickers dropped
+  // out of the feed, and they said nothing about why. If any position is
+  // carrying cost basis instead of a mark, the tiles say so on their own face —
+  // the subtitle is the only place a reader looks before believing the number.
+  const incomplete = t.unpriced > 0;
+  const sub = incomplete
+    ? `${t.unpriced} position${t.unpriced>1?"s":""} at cost — incomplete`
+    : "cash " + fmt$(state.cash);
   document.getElementById("tiles").innerHTML =
-    tile("Account value", fmt$(t.total), "cash " + fmt$(state.cash)) +
-    tile("P&L", (pl >= 0 ? "+" : "") + fmt$(pl), (plPct >= 0 ? "+" : "") + plPct.toFixed(2) + "%", cls(pl)) +
+    tile("Account value", fmt$(t.total), sub) +
+    tile("P&L", (pl >= 0 ? "+" : "") + fmt$(pl),
+         incomplete ? "incomplete — see Positions"
+                    : (plPct >= 0 ? "+" : "") + plPct.toFixed(2) + "%",
+         incomplete ? "" : cls(pl)) +
     tile("SPY same period", spyPct != null ? (spyPct >= 0 ? "+" : "") + spyPct.toFixed(2) + "%" : "—",
          "since your first mark", spyPct != null ? cls(spyPct) : "") +
-    tile("vs SPY", alpha != null ? (alpha >= 0 ? "+" : "") + alpha.toFixed(2) + "pp" : "—",
-         "your alpha", alpha != null ? cls(alpha) : "") +
+    tile("vs SPY", (alpha != null && !incomplete) ? (alpha >= 0 ? "+" : "") + alpha.toFixed(2) + "pp" : "—",
+         incomplete ? "needs every position priced" : "your alpha",
+         (alpha != null && !incomplete) ? cls(alpha) : "") +
     tile("Positions", Object.keys(state.lots).length, PX ? PX.as_of + " closes" : "");
   function tile(k, v, d, c) {
     return `<div class="tile"><div class="k">${k}</div><div class="v ${c||""}">${v}</div><div class="d">${d||""}</div></div>`;
   }
 }
 
+function positionsNotice(nStale, nNoMark) {
+  const bits = [];
+  if (nStale) bits.push(`<b>${nStale}</b> position${nStale>1?"s are":" is"} priced at an <b>earlier close</b> than ${esc(PX.as_of)} — the badge on the row gives the date. Real prices, older marks.`);
+  if (nNoMark) bits.push(`<b>${nNoMark}</b> position${nNoMark>1?"s have":" has"} <b>no close at all</b> in the price file and ${nNoMark>1?"are":"is"} shown at cost basis. That is a placeholder, not a market value — do not read those P&L figures.`);
+  bits.push(`Nothing has been sold; your lots are untouched. While any position is unpriced the equity curve <b>skips the day</b> rather than recording a total that is partly cost basis.`);
+  return `<div class="notice ${nNoMark ? "bad" : "warn"}">${bits.join(" ")}</div>`;
+}
+
 function renderPositions() {
   const el = document.getElementById("positions");
   const syms = Object.keys(state.lots).sort();
   if (!syms.length) { el.innerHTML = '<div class="empty">No positions yet — buy something above. Starting cash is $100,000.</div>'; return; }
-  let rows = "";
+  let rows = "", nStale = 0, nNoMark = 0;
   for (const t of syms) {
     const lot = state.lots[t];
     const p = price(t);
-    const mv = p != null ? lot.qty * p : lot.cost;
+    const st = staleAt(t);
     const avg = lot.cost / lot.qty;
-    const pl = p != null ? (p - avg) * lot.qty : 0;
+    // Row state: a real close from this session, a real close from an earlier
+    // one, or no mark at all.
+    const cls = p == null ? "nomark" : (st ? "stale" : "");
+    if (p == null) nNoMark++; else if (st) nStale++;
+
+    // Value. A stale close is a real price, so P&L off it is real P&L — just
+    // measured to an older date, which the badge states. With no price at all
+    // the only number left is cost, and cost is not a mark: it is labelled as
+    // such instead of being quietly totalled as if it were market value.
+    const mv = p != null ? lot.qty * p : lot.cost;
+    const pl = p != null ? (p - avg) * lot.qty : null;
     const plp = p != null ? (p / avg - 1) * 100 : null;
-    const chg = p != null && PX.prev[t] ? (p / PX.prev[t] - 1) * 100 : null;
-    rows += `<tr><td class="mono"><b>${esc(t)}</b></td><td style="color:var(--ink3)">${esc((PX.themes[t]||"—"))}</td>
+    // Day change is suppressed on a stale row. `prev` there is the day before
+    // THAT ticker's close, so the number is sound but sits in a column every
+    // other row reads as today — which is how you misread it.
+    const chg = (p != null && !st && PX.prev[t]) ? (p / PX.prev[t] - 1) * 100 : null;
+
+    const badge = p == null
+      ? `<span class="badge nomark" title="No close for ${esc(t)} in the published price file — not this session's, not any earlier one. Value below is COST BASIS, a placeholder, not a mark.">no mark</span>`
+      : (st ? `<span class="badge stale" title="Last close available for ${esc(t)} is from ${esc(st)}, not ${esc(PX.as_of)}. The price is real; it is just older, so P&L is measured to that date and the day change is hidden.">${esc(st)}</span>`
+            : "");
+
+    rows += `<tr class="${cls}"><td class="mono"><b>${esc(t)}</b>${badge}</td><td style="color:var(--ink3)">${esc((PX.themes[t]||"—"))}</td>
       <td>${lot.qty.toFixed(4).replace(/\.?0+$/,"")}</td><td>$${fmt2(avg)}</td>
       <td>${p!=null?"$"+fmt2(p):"—"}</td>
       <td class="${chg>=0?"pos":"neg"}">${chg!=null?(chg>=0?"+":"")+chg.toFixed(2)+"%":"—"}</td>
-      <td>${fmt$(mv)}</td>
-      <td class="${pl>=0?"pos":"neg"}">${(pl>=0?"+":"")+fmt$(pl)}${plp!=null?" ("+(plp>=0?"+":"")+plp.toFixed(1)+"%)":""}</td>
+      <td>${fmt$(mv)}${p==null?'<span class="badge nomark" title="Cost basis standing in for a market value.">cost</span>':""}</td>
+      <td class="${pl>=0?"pos":"neg"}">${pl!=null?(pl>=0?"+":"")+fmt$(pl)+(plp!=null?" ("+(plp>=0?"+":"")+plp.toFixed(1)+"%)":""):"—"}</td>
       <td><span class="sellrow" data-t="${esc(t)}">sell</span></td></tr>`;
   }
-  el.innerHTML = `<table><tr><th>Ticker</th><th>Theme</th><th>Qty</th><th>Avg cost</th><th>Last close</th><th>Day</th><th>Value</th><th>P&L</th><th></th></tr>${rows}</table>`;
+  const note = (nStale || nNoMark) ? positionsNotice(nStale, nNoMark) : "";
+  el.innerHTML = note + `<table><tr><th>Ticker</th><th>Theme</th><th>Qty</th><th>Avg cost</th><th>Last close</th><th>Day</th><th>Value</th><th>P&L</th><th></th></tr>${rows}</table>`;
   el.querySelectorAll(".sellrow").forEach(x => x.addEventListener("click", () => {
     document.getElementById("ticker").value = x.dataset.t;
     document.getElementById("mode").value = "sh";
@@ -293,8 +396,11 @@ function renderChart() {
     line(spy, "#8b949e", 1.2) + line(you, "#58a6ff", 1.8) +
     `<text x="${L}" y="${H-6}" font-size="9" fill="#6e7681">${c[0].d}</text>` +
     `<text x="${W-R}" y="${H-6}" text-anchor="end" font-size="9" fill="#6e7681">${c[c.length-1].d}</text>`;
-  document.getElementById("chartFoot").textContent =
-    `Blue = your account, gray = SPY, both indexed to 100 at your start (${c[0].d}). One mark per trading day.`;
+  document.getElementById("chartFoot").innerHTML =
+    `Blue = your account, gray = SPY, both indexed to 100 at your start (${esc(c[0].d)}). One mark per trading day.` +
+    (state.curveSkipped
+      ? ` <b style="color:var(--amber)">No mark recorded for ${esc(state.curveSkipped)}</b> — a position had no price that day, so the curve skips it rather than recording a total that was partly cost basis.`
+      : "");
 }
 
 function quote() {
@@ -304,15 +410,33 @@ function quote() {
   const p = price(t);
   if (p == null) {
     el.innerHTML = PX.themes[t]
-      ? `${t} is in the universe but has no price in today's file — try another name.`
-      : `${t} isn't in the tradeable universe (the ~1,380 tickers regime-desk tracks).`;
+      ? `${t} is in the universe but has no close in the current price file — try another name.`
+      : `${t} isn't in the tradeable universe (the ${Object.keys(PX.themes).length.toLocaleString()} tickers regime-desk tracks).`;
     return;
   }
-  const chg = PX.prev[t] ? (p / PX.prev[t] - 1) * 100 : null;
+  const st = staleAt(t);
+  const chg = (!st && PX.prev[t]) ? (p / PX.prev[t] - 1) * 100 : null;
   const held = state.lots[t];
   el.innerHTML = `<b class="mono">${t}</b>${nameOf(t) ? " · " + esc(nameOf(t)) : ""} · ${esc(PX.themes[t] || "—")} · last close $${fmt2(p)}` +
+    (st ? ` <span class="badge stale" title="This is ${esc(st)}'s close, not ${esc(PX.as_of)}'s.">${esc(st)} close</span>` : "") +
     (chg != null ? ` · <span class="${chg>=0?"pos":"neg"}">${(chg>=0?"+":"")+chg.toFixed(2)}% day</span>` : "") +
     (held ? ` · you hold ${held.qty.toFixed(4).replace(/\.?0+$/,"")} sh` : "");
+}
+
+// A fill against a close from several days ago is a free option — you already
+// know what the market did since. Allowed, because refusing would strand a
+// whole book during a feed outage, but never silently: the trader confirms it
+// and the trade log records the date the fill actually came from.
+function confirmStaleFill(t, side, st) {
+  return confirm(
+    `${side} ${t} would fill at its ${st} close, not ${PX.as_of}'s — that price is ` +
+    `stale in the published file.\n\nYou already know what the market has done since, ` +
+    `so this is not a fair fill. It will be logged with the ${st} date.\n\nGo ahead anyway?`);
+}
+
+function fillBasis(t) {
+  const st = staleAt(t);
+  return st ? st + " close (stale)" : PX.as_of + " close";
 }
 
 function orderQty(t, p) {
@@ -326,6 +450,8 @@ function buy() {
   const t = (document.getElementById("ticker").value || "").trim().toUpperCase();
   const p = price(t);
   if (p == null) { quote(); return; }
+  const st = staleAt(t);
+  if (st && !confirmStaleFill(t, "Buying", st)) return;
   const qty = orderQty(t, p);
   if (qty == null) return alert("Enter an amount.");
   const cost = qty * p;
@@ -335,7 +461,7 @@ function buy() {
   lot.qty += qty; lot.cost += cost;
   state.lots[t] = lot;
   state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
-                      side: "BUY", t, qty, px: p, fill: PX.as_of + " close" });
+                      side: "BUY", t, qty, px: p, fill: fillBasis(t) });
   const tot = totals();
   logEvent({type: "trade", side: "BUY", t, qty, px: p, value: qty * p,
             cash: state.cash, total: tot.total, as_of: PX.as_of});
@@ -347,7 +473,12 @@ function sell() {
   const lot = state.lots[t];
   if (!lot) return alert(`No position in ${t} (shorting is disabled in the simulator).`);
   const p = price(t);
-  if (p == null) return alert(`${t} has no price today.`);
+  if (p == null) return alert(
+    `${t} has no close in the current price file, so there is nothing to fill against.\n\n` +
+    `Your shares are safe — the position is untouched, it just cannot be marked or ` +
+    `traded until the feed carries it again.`);
+  const st = staleAt(t);
+  if (st && !confirmStaleFill(t, "Selling", st)) return;
   let qty = orderQty(t, p);
   if (qty == null) return alert("Enter an amount.");
   if (qty > lot.qty + 1e-9) qty = lot.qty; // sell-all clamp
@@ -357,7 +488,7 @@ function sell() {
   if (lot.qty < 1e-9) delete state.lots[t];
   state.cash += proceeds;
   state.trades.push({ ts: new Date().toISOString().slice(0, 16).replace("T", " "),
-                      side: "SELL", t, qty, px: p, fill: PX.as_of + " close" });
+                      side: "SELL", t, qty, px: p, fill: fillBasis(t) });
   const tot = totals();
   logEvent({type: "trade", side: "SELL", t, qty, px: p, value: qty * p,
             cash: state.cash, total: tot.total, as_of: PX.as_of});
@@ -393,8 +524,17 @@ async function init() {
   try {
     const r = await fetch("data/prices.json?_=" + Date.now());
     PX = await r.json();
-    document.getElementById("asof").textContent =
-      `Fills at ${PX.as_of} closes · ${Object.keys(PX.prices).length} tradeable tickers · account stored in this browser`;
+    // Coverage on the header line. The number of tickers in this file WAS the
+    // signal that the 2026-08-18 universe refresh had broken the download —
+    // it fell from 2,468 to 1,388 over two days and nothing said a word.
+    const cov = PX.coverage || {};
+    const nStale = PX.stale ? Object.keys(PX.stale).length : 0;
+    document.getElementById("asof").innerHTML =
+      `Fills at ${esc(PX.as_of)} closes · ${Object.keys(PX.prices).length.toLocaleString()} tradeable tickers` +
+      (nStale ? ` · <span style="color:var(--amber)">${nStale.toLocaleString()} carrying an earlier close</span>` : "") +
+      (cov.universe && cov.priced < cov.universe
+        ? ` · <span style="color:var(--red)">${(cov.universe - cov.priced).toLocaleString()} unpriced</span>` : "") +
+      ` · account stored in this browser`;
     const dl = document.getElementById("unidata");
     dl.innerHTML = Object.keys(PX.themes).sort().map(t =>
       `<option value="${t}">${esc(nameOf(t) || PX.themes[t] || "")}</option>`).join("");
