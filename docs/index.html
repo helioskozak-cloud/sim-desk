@@ -172,6 +172,47 @@ function nameOf(t) { return (PX && PX.names && PX.names[t]) || ""; }
 function staleAt(t) { return (PX && PX.stale && PX.stale[t]) || null; }
 function priced(t) { return price(t) != null; }
 
+// --- one-time repair of the marks the outage already wrote -----------------
+// The guard in markCurve() stops NEW bad points. It cannot reach the ones
+// already sitting in each browser's localStorage, and a curve point is
+// permanent — the vs-SPY number is measured off it.
+//
+// The published file on these three dates, against a 2,470-ticker universe:
+//
+//     as_of 2026-08-19    2,236 priced      234 missing
+//     as_of 2026-08-20    1,388 priced    1,082 missing
+//     as_of 2026-08-21    1,410 priced    1,061 missing
+//
+// Any mark on those dates was computed with cost basis standing in for market
+// value on up to 43% of the book. They cannot be recomputed — the app holds
+// only the latest close and the one before it, so the prices those days needed
+// are simply gone — so they are DELETED rather than corrected. A gap the chart
+// draws through is honest; a plausible wrong number is not.
+//
+// This may also remove sound marks, for an account that happened to hold only
+// tickers the feed kept. There is no way to tell from here which is which, and
+// between silently keeping a corrupted point and losing a good one, the point
+// that gets acted on is the corrupted one.
+//
+// SPY itself was priced on all three days, so `spy0` and the benchmark leg are
+// unaffected and are left alone. Trades are unaffected too: an unpriceable
+// ticker could not be bought or sold at all, so no fill went off a bad mark.
+//
+// Runs once, tagged in state so a reload does not re-run it.
+const OUTAGE_DATES = ["2026-08-19", "2026-08-20", "2026-08-21"];
+const REPAIR_TAG = "outage-2026-08";
+
+function repairOutageCurve() {
+  if (!state || state.repaired === REPAIR_TAG) return;
+  const hit = (state.curve || []).filter(p => OUTAGE_DATES.includes(p.d)).map(p => p.d);
+  if (hit.length) {
+    state.curve = state.curve.filter(p => !OUTAGE_DATES.includes(p.d));
+    state.curveRepaired = hit;
+  }
+  state.repaired = REPAIR_TAG;
+  save();
+}
+
 // --- telemetry: trades + daily snapshots go to the desk's API so the boss
 // --- can review activity. Queued in localStorage when the API is offline.
 const EP_FILE = "https://helioskozak-cloud.github.io/regime-desk/api_endpoint.json";
@@ -370,12 +411,31 @@ function renderHistory() {
   el.innerHTML = `<table><tr><th>When</th><th>Trade</th><th>Qty</th><th>Fill</th><th>Value</th><th>Fill basis</th></tr>${rows}</table>`;
 }
 
+// What the footer has to disclose about gaps in the line above it. A chart
+// draws straight through a missing day, so a removed mark is invisible unless
+// it is named.
+function curveNotes(c) {
+  const notes = [];
+  const gone = (state.curveRepaired || []).filter(d => !c.some(p => p.d === d));
+  if (gone.length) {
+    notes.push(`<b style="color:var(--amber)">${gone.length} mark${gone.length>1?"s":""} removed (${gone.map(esc).join(", ")})</b> — the published price file was missing up to 1,061 tickers on those days, so those totals were partly cost basis. They cannot be recomputed, so the line skips them.`);
+  }
+  if (state.curveSkipped) {
+    notes.push(`<b style="color:var(--amber)">No mark recorded for ${esc(state.curveSkipped)}</b> — a position had no price that day, so the curve skips it rather than recording a total that was partly cost basis.`);
+  }
+  return notes.join(" ");
+}
+
 function renderChart() {
   const svg = document.getElementById("chart");
   const c = state.curve;
+  const foot = document.getElementById("chartFoot");
   if (c.length < 2) {
     svg.innerHTML = '<text x="12" y="30" fill="#6e7681" font-size="12">The equity curve appears after your account has marks on two different price dates — check back tomorrow after the close.</text>';
-    document.getElementById("chartFoot").textContent = "";
+    // Still disclosed: with the outage marks gone, a young account can drop
+    // below two points, and "check back tomorrow" alone would read as if
+    // nothing had been removed.
+    foot.innerHTML = curveNotes(c);
     return;
   }
   const W = 900, H = 220, L = 46, R = 8, T = 12, B = 24;
@@ -396,11 +456,9 @@ function renderChart() {
     line(spy, "#8b949e", 1.2) + line(you, "#58a6ff", 1.8) +
     `<text x="${L}" y="${H-6}" font-size="9" fill="#6e7681">${c[0].d}</text>` +
     `<text x="${W-R}" y="${H-6}" text-anchor="end" font-size="9" fill="#6e7681">${c[c.length-1].d}</text>`;
-  document.getElementById("chartFoot").innerHTML =
-    `Blue = your account, gray = SPY, both indexed to 100 at your start (${esc(c[0].d)}). One mark per trading day.` +
-    (state.curveSkipped
-      ? ` <b style="color:var(--amber)">No mark recorded for ${esc(state.curveSkipped)}</b> — a position had no price that day, so the curve skips it rather than recording a total that was partly cost basis.`
-      : "");
+  foot.innerHTML =
+    `Blue = your account, gray = SPY, both indexed to 100 at your start (${esc(c[0].d)}). One mark per trading day. ` +
+    curveNotes(c);
 }
 
 function quote() {
@@ -541,6 +599,10 @@ async function init() {
   } catch (e) {
     document.getElementById("asof").textContent = "Price file failed to load — refresh, or tell whoever runs this.";
   }
+  // BEFORE markCurve, deliberately. Dropping the bad 2026-08-21 mark lets
+  // markCurve write a correct one straight back from a now-complete price
+  // file, so only the days that genuinely cannot be recovered stay as gaps.
+  repairOutageCurve();
   markCurve();
   renderAll(); renderUniverse();
   discoverSimApi();

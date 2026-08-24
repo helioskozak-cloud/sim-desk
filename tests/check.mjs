@@ -105,13 +105,83 @@ const NOMARK = { MSFT: { qty: 100, cost: 40000 }, EA: { qty: 300, cost: 30000 } 
 
 // --------------------------------------------- a skipped day is not backfilled
 {
-  const { api } = run({ ...book(NOMARK), curve: [{ d: "2026-08-19", v: 105000, spy: 760 }] });
+  // 08-18, not 08-19: the outage repair below purges 08-19/20/21, and this
+  // test is about markCurve's guard, not the repair.
+  const { api } = run({ ...book(NOMARK), curve: [{ d: "2026-08-18", v: 105000, spy: 760 }] });
   await sleep(60);
   ok("nomark: an existing curve is left alone", api.state.curve.length === 1 &&
-     api.state.curve[0].d === "2026-08-19" &&
+     api.state.curve[0].d === "2026-08-18" &&
      api.state.curve[0].v === 105000 && api.state.curve[0].spy === 760,
      "must not overwrite the last good mark with an incomplete one -- the VALUE "
      + "matters, not just the date: " + JSON.stringify(api.state.curve));
+}
+
+// --------------------------------------- one-time repair of the outage marks
+// markCurve's guard stops NEW bad points; it cannot reach the ones already in
+// localStorage. Marks on 08-19/20/21 were computed with cost basis standing in
+// for up to 43% of the book, cannot be recomputed, and are deleted.
+{
+  const curve = [
+    { d: "2026-08-18", v: 101000, spy: 750 },   // clean, must survive
+    { d: "2026-08-19", v: 96000,  spy: 752 },   // outage
+    { d: "2026-08-20", v: 78000,  spy: 755 },   // outage -- the visible "dump"
+    { d: "2026-08-21", v: 79000,  spy: 758 },   // outage
+  ];
+  const { api } = run({ ...book(FRESH), curve, spy0: 700 });
+  await sleep(60);
+  const days = api.state.curve.map(p => p.d);
+  ok("repair: the clean mark survives", days.includes("2026-08-18"));
+  ok("repair: 08-19 and 08-20 are gone",
+     !days.includes("2026-08-19") && !days.includes("2026-08-20"), days.join(","));
+  ok("repair: 08-21 is re-derived, not merely dropped",
+     days.includes("2026-08-21"), "the file can price the whole book again");
+  ok("repair: the re-derived 08-21 is a real mark, not the old total",
+     api.state.curve.find(p => p.d === "2026-08-21").v !== 79000);
+  ok("repair: spy0 is left alone", api.state.spy0 === 700,
+     "SPY was priced on all three days -- the benchmark leg was never wrong");
+  ok("repair: what was removed is recorded",
+     JSON.stringify(api.state.curveRepaired) ===
+     JSON.stringify(["2026-08-19", "2026-08-20", "2026-08-21"]));
+}
+{
+  // Idempotent, and it must not eat marks written AFTER the repair ran.
+  const curve = [{ d: "2026-08-20", v: 78000, spy: 755 }];
+  const { api, store } = run({ ...book(FRESH), curve, spy0: 700 });
+  await sleep(60);
+  const first = JSON.parse(store["simdesk_v1"]);
+  ok("repair: tagged so it runs once", first.repaired === "outage-2026-08");
+  const { api: api2 } = run(first);
+  await sleep(60);
+  ok("repair: a second load removes nothing further",
+     api2.state.curve.length === api.state.curve.length,
+     `${api.state.curve.length} -> ${api2.state.curve.length}`);
+}
+{
+  // A book that predates the outage entirely is untouched.
+  const curve = [{ d: "2026-07-01", v: 100500, spy: 700 },
+                 { d: "2026-07-02", v: 100900, spy: 702 }];
+  const { api } = run({ ...book(FRESH), curve, spy0: 700 });
+  await sleep(60);
+  ok("repair: an unaffected account keeps every mark",
+     api.state.curve.filter(p => p.d.startsWith("2026-07")).length === 2);
+  ok("repair: nothing disclosed when nothing was removed",
+     !api.state.curveRepaired);
+}
+{
+  // The gap has to be VISIBLE. A chart draws straight through a missing day.
+  const curve = [{ d: "2026-08-18", v: 101000, spy: 750 },
+                 { d: "2026-08-19", v: 96000, spy: 752 },
+                 { d: "2026-08-20", v: 78000, spy: 755 }];
+  const { api, els } = run({ ...book(FRESH), curve, spy0: 700 });
+  await sleep(60);
+  const f = els.chartFoot.innerHTML;
+  ok("repair: the footer names the removed days",
+     f.includes("2026-08-19") && f.includes("2026-08-20"), f);
+  ok("repair: the footer says why", f.includes("cost basis"));
+  ok("repair: a re-derived day is NOT reported as removed",
+     !f.includes("2026-08-21"),
+     "08-21 came back from a complete price file -- claiming it was lost is wrong");
+  void api;
 }
 
 // ------------------------------------------------------------ trading guards

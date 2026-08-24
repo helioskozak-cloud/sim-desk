@@ -31,8 +31,19 @@
          border-radius:7px;padding:6px 12px;font-size:13px;cursor:pointer}
   button:hover{border-color:var(--dim)}
   main{padding:18px 20px;max-width:1200px;margin:0 auto}
+  /* One rhythm for the whole page: 26px above a section heading, 10px below
+     it, and nothing else setting vertical margins. The KPI bar used to carry
+     an inline margin-bottom and the curve panel an inline padding, so the
+     four sections sat on three different spacings. */
   h2{font-size:12px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);
      margin:26px 0 10px;font-weight:600}
+  h2:first-of-type{margin-top:22px}
+  #kpis{margin:0}
+  main > p{margin:26px 0 0}
+  /* Every section body is a panel: bordered for the tables and the chart,
+     a grid of panels for the cards. `.pad` is for panels whose content is not
+     a full-bleed table. */
+  .pad{padding:14px}
   .wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--panel)}
   table{border-collapse:collapse;width:100%;min-width:640px}
   th,td{padding:9px 12px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)}
@@ -48,14 +59,34 @@
   .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600}
   .buy{background:rgba(63,185,80,.15);color:var(--pos)}
   .sell{background:rgba(248,81,73,.15);color:var(--neg)}
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
-  .card{border:1px solid var(--border);border-radius:10px;background:var(--panel);padding:13px 15px}
+  /* Six columns of tabular numbers need room. The track was 290px, and the
+     card table opted out of the page's `min-width:640px` with `min-width:0`,
+     so instead of scrolling like every other table here it crushed six numeric
+     columns into ~260px. Widened to 400, and `min(100%, …)` so a phone gets
+     one full-width card instead of a horizontal scrollbar on the whole page. */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));
+         gap:12px}
+  /* Grid children default to min-width:auto, which lets a wide table push the
+     track past its share. This is what makes the scroll wrapper below work. */
+  .card{border:1px solid var(--border);border-radius:10px;background:var(--panel);
+        padding:13px 15px;min-width:0}
   .card h3{margin:0 0 3px;font-size:14.5px}
   .card .sub{color:var(--muted);font-size:12px;margin-bottom:10px}
-  .card table{min-width:0}
-  .card th,.card td{padding:5px 6px;font-size:12.5px}
+  /* Same pattern as .wrap: scroll rather than squeeze. Bled to the card edges
+     so a scrolled row still lines up with the heading above it. */
+  .card .tscroll{overflow-x:auto;margin:0 -15px;padding:0 15px}
+  .card table{min-width:330px}
+  .card th,.card td{padding:5px 7px;font-size:12.5px}
+  .card th{position:static}
   .feed{max-height:420px;overflow-y:auto}
   .empty{color:var(--dim);padding:26px;text-align:center}
+  /* The empty state sits straight in the grid, so without this the Positions
+     section is the only one with no panel behind it. */
+  .cards .empty{grid-column:1/-1;border:1px solid var(--border);border-radius:10px;
+                background:var(--panel)}
+  /* An inline SVG carries a descender gap below the baseline, which made the
+     chart panel's bottom padding read ~4px deeper than its top. */
+  #curve svg{display:block}
   .big{font-size:15px}
   .barrow{display:flex;gap:6px;align-items:baseline}
   a.tab{color:var(--muted);text-decoration:none;font-size:13px;border:1px solid var(--border);
@@ -74,7 +105,7 @@
   <button id="refreshBtn">Refresh</button>
 </header>
 <main>
-  <div id="kpis" class="barrow" style="gap:22px;flex-wrap:wrap;margin-bottom:4px"></div>
+  <div id="kpis" class="barrow" style="gap:22px;flex-wrap:wrap"></div>
   <h2>Leaderboard</h2>
   <div class="wrap"><table id="board">
     <thead><tr>
@@ -84,7 +115,7 @@
   </table></div>
 
   <h2>Equity curves — indexed to 100 at each trader's start</h2>
-  <div class="wrap" style="padding:14px"><div id="curve"></div></div>
+  <div class="wrap pad"><div id="curve"></div></div>
 
   <h2>Positions by trader</h2>
   <div id="cards" class="cards"></div>
@@ -94,7 +125,7 @@
     <thead><tr><th>Time</th><th>Trader</th><th>Action</th><th>Ticker</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
     <tbody id="feedBody"></tbody>
   </table></div>
-  <p class="dim" style="font-size:12px;margin-top:18px">
+  <p class="dim" style="font-size:12px">
     Paper-trading telemetry. Positions are marked at the latest EOD prices the trader app uses
     (<span id="pxDate" class="mono">—</span>); values match what each trader sees. Auto-refreshes every 20s.
   </p>
@@ -216,6 +247,7 @@ function renderCards(rows){
     <div class="card">
       <h3>${esc(r.name)}</h3>
       <div class="sub">${fmt$(r.total)} · <span class="${cls(r.pl)}">${fmtPct(r.plPct)}</span> · cash ${fmt$(r.cash)}</div>
+      <div class="tscroll">
       <table><thead><tr><th>Ticker</th><th>Qty</th><th>Avg</th><th>Last</th><th>Value</th><th>P&amp;L</th></tr></thead>
       <tbody>${r.holdings.map(h=>`<tr>
         <td class="name">${esc(h.t)}</td>
@@ -225,6 +257,7 @@ function renderCards(rows){
         <td class="mono">${fmt$(h.mv)}</td>
         <td class="mono ${h.px==null?"dim":cls(h.pl)}">${h.px==null?"—":(h.pl>=0?"+":"")+fmt$(h.pl)}</td>
       </tr>`).join("")}</tbody></table>
+      </div>
     </div>`).join("");
 }
 
