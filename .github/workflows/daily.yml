@@ -49,13 +49,16 @@ jobs:
           python - <<'PY'
           import json, sys, pathlib
           c = json.loads(pathlib.Path("docs/data/prices.json").read_text())["coverage"]
-          print(f"universe {c['universe']} · fresh {c['fresh']} "
-                f"({c['fresh_pct']:.1%}) · carried forward {c['stale']}")
+          # ASCII only: this gate is the thing that has to work when
+          # everything else did not, so it does not depend on the runner's
+          # stdout encoding.
+          print(f"universe {c['universe']} | fresh {c['fresh']} "
+                f"({c['fresh_pct']:.1%}) | carried forward {c['stale']}")
           bad = []
           if c["fresh_pct"] < c["floor"]:
               bad.append(f"fresh coverage {c['fresh_pct']:.1%} < floor {c['floor']:.0%}")
           if not c["spy_fresh"]:
-              bad.append("SPY has no fresh close — the benchmark leg of every "
+              bad.append("SPY has no fresh close - the benchmark leg of every "
                          "intern's vs-SPY number is stale")
           if bad:
               print("::error::" + "; ".join(bad))
