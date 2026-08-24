@@ -32,7 +32,21 @@ export function run(book, opts = {}) {
       setItem: (k, v) => { store[k] = String(v); },
       removeItem: k => { delete store[k]; },
     },
-    fetch: async () => ({ json: async () => JSON.parse(JSON.stringify(PRICES)) }),
+    // Starts from the REAL committed price file — so a payload the front end
+    // cannot read still fails CI — then lets a test patch in the exact
+    // condition it is about.
+    //
+    // `patch` exists because the first version of this suite hardcoded a
+    // Friday close (MSFT at 483.24) and went red the next time prices
+    // refreshed, which is every weekday. A test coupled to data that changes
+    // by design is worse than no test: a red run that means nothing teaches
+    // you to ignore red runs, which is the exact habit that let the 08-20
+    // outage ship green. Assert on behaviour; inject the data.
+    fetch: async () => ({ json: async () => {
+      const p = JSON.parse(JSON.stringify(PRICES));
+      if (opts.patch) opts.patch(p);
+      return p;
+    } }),
     alert: m => { g.__alerts.push(m); },
     confirm: m => { g.__confirms.push(m); return opts.confirm ?? true; },
     prompt: () => "harness",
