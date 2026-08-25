@@ -223,7 +223,13 @@ let SIM_API = null;
 function trader() {
   let n = localStorage.getItem("simdesk_trader");
   if (!n) {
-    n = (prompt("Name for your trade log (shown to your supervisor):") || "intern").trim().slice(0, 40) || "intern";
+    // Do NOT default to "intern". A dismissed prompt used to become that
+    // name, so any casual visitor -- or an automated browser, where prompt()
+    // returns null -- silently filed telemetry under a real trader's account
+    // and corrupted their history. No name, no logging.
+    const v = prompt("Name for your trade log (shown to your supervisor):");
+    n = (v || "").trim().slice(0, 40);
+    if (!n) return null;
     localStorage.setItem("simdesk_trader", n);
   }
   return n;
@@ -241,7 +247,9 @@ async function discoverSimApi() {
   } catch (e) {}
 }
 function logEvent(evt) {
-  evt.trader = trader(); evt.ts = new Date().toISOString().slice(0, 16);
+  const who = trader();
+  if (!who) return;               // unnamed session: never write to the log
+  evt.trader = who; evt.ts = new Date().toISOString().slice(0, 16);
   const box = JSON.parse(localStorage.getItem("simdesk_outbox") || "[]");
   box.push(evt);
   localStorage.setItem("simdesk_outbox", JSON.stringify(box.slice(-500)));

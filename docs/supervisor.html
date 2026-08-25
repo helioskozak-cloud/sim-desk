@@ -179,10 +179,27 @@ function aggregate(events){
         L.qty += qty; L.cost += val;
       }
       T.trades.push(e);
+      // Cash from the TRADE stream only. A trade's cash is the balance right
+      // after that trade, so it is consistent with the lots rebuilt above.
       if(e.cash != null) T.cash = +e.cash;
     } else if(e.type === "snapshot"){
       T.snaps++;
-      if(e.cash != null) T.cash = +e.cash;
+      // THE TRADE STREAM IS AUTHORITATIVE. Snapshot cash must never override
+      // it once trades exist, because lots are rebuilt from trades and mixing
+      // the two sources produces a book that does not add up.
+      //
+      // That mismatch is what showed an intern up ~85%: about $87k of lots
+      // rebuilt from the full trade history, added to a $100k cash balance
+      // taken from a stray fresh-account snapshot. Neither number was wrong
+      // on its own; they just described different accounts.
+      //
+      // Known limitation, stated rather than guessed at: a trader who really
+      // does hit Reset will still be over-reported here, because this log is
+      // append-only and a reset leaves no marker in it. Detecting one by
+      // looking for a $100k/$100k snapshot was tried and rejected -- the log
+      // contains such snapshots from unrelated fresh page loads, and that
+      // heuristic silently deleted eleven genuine trades.
+      if(!T.trades.length && e.cash != null) T.cash = +e.cash;
       if(T.spy0 == null && e.spy != null) T.spy0 = +e.spy;
       if(e.total != null){
         const d = e.as_of || (e.ts||"").slice(0,10);
