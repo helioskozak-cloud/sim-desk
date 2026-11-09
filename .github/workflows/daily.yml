@@ -3,6 +3,13 @@ name: Daily prices
 on:
   schedule:
     - cron: "43 21 * * 1-5"   # ~5:43pm ET weekdays, after the close
+    # GitHub starts the evening run 3-4 hours late (00:00-01:46 UTC since
+    # 10-20), and in that window Yahoo hands back the PRIOR day's bar for
+    # ~99% of tickers: 10-20..11-07 failed at 0.7% fresh, while the same code
+    # dispatched 11-09 15:53 ET priced 99.3%. A morning run before the open
+    # captures the close for sure; the file only ever improves, so two runs
+    # a day are harmless.
+    - cron: "7 10 * * 2-6"    # ~5-6am ET, Tue-Sat, the previous session
   workflow_dispatch:
 
 permissions:
